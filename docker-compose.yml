@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  # Global Envoy (входной балансер)
+  global-envoy:
+    image: envoyproxy/envoy:v1.36.0
+    container_name: global-envoy
+    volumes:
+      - ./envoy/global-envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "10000:10000"
+      - "19000:9901"    
+    depends_on:
+      - zone1-envoy
+      - zone2-envoy
+
+  # Zone 1 Envoy (балансер внутри зоны 1)
+  zone1-envoy:
+    image: envoyproxy/envoy:v1.36.0
+    container_name: zone1-envoy
+    volumes:
+      - ./envoy/zone1-envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "11001:10000"
+      - "19001:9901"
+    depends_on:
+      - app-zone1-1
+      - app-zone1-2
+
+  # Zone 2 Envoy
+  zone2-envoy:
+    image: envoyproxy/envoy:v1.36.0
+    container_name: zone2-envoy
+    volumes:
+      - ./envoy/zone2-envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "12001:10000"
+      - "19002:9901"
+    depends_on:
+      - app-zone2-1
+      - app-zone2-2
+
+  app-zone1-1:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        - INSTANCE=zone1-1
+    container_name: app-zone1-1
+    environment:
+      - INSTANCE_NAME=zone1-1
+
+  app-zone1-2:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        - INSTANCE=zone1-2
+    container_name: app-zone1-2
+    environment:
+      - INSTANCE_NAME=zone1-2
+
+  app-zone2-1:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        - INSTANCE=zone2-1
+    container_name: app-zone2-1
+    environment:
+      - INSTANCE_NAME=zone2-1
+
+  app-zone2-2:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        - INSTANCE=zone2-2
+    container_name: app-zone2-2
+    environment:
+      - INSTANCE_NAME=zone2-2
+
+networks:
+  default:
+    name: geo-demo-net
