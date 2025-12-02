@@ -13,6 +13,8 @@ services:
     depends_on:
       - zone1-envoy
       - zone2-envoy
+    networks:
+      - global-net
 
   # Zone 1 Envoy (балансер внутри зоны 1)
   zone1-envoy:
@@ -26,6 +28,9 @@ services:
     depends_on:
       - app-zone1-1
       - app-zone1-2
+    networks:
+      - global-net
+      - zone1-net
 
   # Zone 2 Envoy
   zone2-envoy:
@@ -39,6 +44,9 @@ services:
     depends_on:
       - app-zone2-1
       - app-zone2-2
+    networks:
+      - global-net
+      - zone2-net
 
   app-zone1-1:
     build:
@@ -49,6 +57,8 @@ services:
     container_name: app-zone1-1
     environment:
       - INSTANCE_NAME=zone1-1
+    networks:
+      - zone1-net
 
   app-zone1-2:
     build:
@@ -59,6 +69,8 @@ services:
     container_name: app-zone1-2
     environment:
       - INSTANCE_NAME=zone1-2
+    networks:
+      - zone1-net
 
   app-zone2-1:
     build:
@@ -69,6 +81,8 @@ services:
     container_name: app-zone2-1
     environment:
       - INSTANCE_NAME=zone2-1
+    networks:
+      - zone2-net
 
   app-zone2-2:
     build:
@@ -79,7 +93,13 @@ services:
     container_name: app-zone2-2
     environment:
       - INSTANCE_NAME=zone2-2
+    networks:
+      - zone2-net
 
 networks:
-  default:
-    name: geo-demo-net
+  global-net:
+    driver: bridge
+  zone1-net:
+    driver: bridge
+  zone2-net:
+    driver: bridge
