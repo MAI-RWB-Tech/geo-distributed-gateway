@@ -21,15 +21,31 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: app_zone2_cluster
+                            retry_policy:
+                              retry_on: "connect-failure,refused-stream,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 2s
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
     - name: app_zone2_cluster
-      connect_timeout: 0.25s
+      connect_timeout: 1s
       type: STRICT_DNS
       lb_policy: ROUND_ROBIN
+      health_checks:
+        - timeout: 1s
+          interval: 5s
+          unhealthy_threshold: 2
+          healthy_threshold: 1
+          http_health_check:
+            path: "/health"
+      outlier_detection:
+        consecutive_5xx: 3
+        interval: 5s
+        base_ejection_time: 15s
+        max_ejection_percent: 100
       load_assignment:
         cluster_name: app_zone2_cluster
         endpoints:

@@ -1,100 +1,188 @@
-version: "3.8"
-
 services:
-  # Global Envoy (входной балансер)
-  global-envoy:
-    image: envoyproxy/envoy:v1.36.0
-    container_name: global-envoy
-    volumes:
-      - ./envoy/global-envoy.yaml:/etc/envoy/envoy.yaml:ro
-    ports:
-      - "10000:10000"
-      - "19000:9901"    
-    depends_on:
-      - zone1-envoy
-      - zone2-envoy
-    networks:
-      - global-net
 
-  # Zone 1 Envoy (балансер внутри зоны 1)
-  zone1-envoy:
-    image: envoyproxy/envoy:v1.36.0
-    container_name: zone1-envoy
-    volumes:
-      - ./envoy/zone1-envoy.yaml:/etc/envoy/envoy.yaml:ro
-    ports:
-      - "11001:10000"
-      - "19001:9901"
-    depends_on:
-      - app-zone1-1
-      - app-zone1-2
-    networks:
-      - global-net
-      - zone1-net
-
-  # Zone 2 Envoy
-  zone2-envoy:
-    image: envoyproxy/envoy:v1.36.0
-    container_name: zone2-envoy
-    volumes:
-      - ./envoy/zone2-envoy.yaml:/etc/envoy/envoy.yaml:ro
-    ports:
-      - "12001:10000"
-      - "19002:9901"
-    depends_on:
-      - app-zone2-1
-      - app-zone2-2
-    networks:
-      - global-net
-      - zone2-net
+  # ── Zone 1 ──────────────────────────────────────────────────────────────────
 
   app-zone1-1:
     build:
-      context: ./app
-      dockerfile: Dockerfile
-      args:
-        - INSTANCE=zone1-1
+      context: .
+      dockerfile: app/Dockerfile
     container_name: app-zone1-1
     environment:
       - INSTANCE_NAME=zone1-1
+      - ZONE=zone1
     networks:
       - zone1-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
 
   app-zone1-2:
     build:
-      context: ./app
-      dockerfile: Dockerfile
-      args:
-        - INSTANCE=zone1-2
+      context: .
+      dockerfile: app/Dockerfile
     container_name: app-zone1-2
     environment:
       - INSTANCE_NAME=zone1-2
+      - ZONE=zone1
     networks:
       - zone1-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  zone1-envoy:
+    image: envoyproxy/envoy:v1.36.0
+    container_name: zone1-envoy
+    environment:
+      # ENVOY_UID=0 tells the official entrypoint script to skip the
+      # "chown /dev/stdout /dev/stderr" step, which fails in rootless Podman.
+      # The script then does: exec envoy -c /etc/envoy/envoy.yaml
+      - ENVOY_UID=0
+    volumes:
+      - ./envoy/zone1-envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      # FR-01: data-plane (10000) NOT exposed externally — all traffic must enter via global-envoy.
+      # Admin API exposed only for Prometheus scraping (observability NFR).
+      - "19001:9901"
+    depends_on:
+      app-zone1-1:
+        condition: service_healthy
+      app-zone1-2:
+        condition: service_healthy
+    networks:
+      - global-net
+      - zone1-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9901' 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  # ── Zone 2 ──────────────────────────────────────────────────────────────────
 
   app-zone2-1:
     build:
-      context: ./app
-      dockerfile: Dockerfile
-      args:
-        - INSTANCE=zone2-1
+      context: .
+      dockerfile: app/Dockerfile
     container_name: app-zone2-1
     environment:
       - INSTANCE_NAME=zone2-1
+      - ZONE=zone2
     networks:
       - zone2-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
 
   app-zone2-2:
     build:
-      context: ./app
-      dockerfile: Dockerfile
-      args:
-        - INSTANCE=zone2-2
+      context: .
+      dockerfile: app/Dockerfile
     container_name: app-zone2-2
     environment:
       - INSTANCE_NAME=zone2-2
+      - ZONE=zone2
     networks:
       - zone2-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  zone2-envoy:
+    image: envoyproxy/envoy:v1.36.0
+    container_name: zone2-envoy
+    environment:
+      - ENVOY_UID=0
+    volumes:
+      - ./envoy/zone2-envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      # FR-01: data-plane (10000) NOT exposed externally — all traffic must enter via global-envoy.
+      - "19002:9901"
+    depends_on:
+      app-zone2-1:
+        condition: service_healthy
+      app-zone2-2:
+        condition: service_healthy
+    networks:
+      - global-net
+      - zone2-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9901' 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  # ── Global entry point ───────────────────────────────────────────────────────
+
+  global-envoy:
+    image: envoyproxy/envoy:v1.36.0
+    container_name: global-envoy
+    environment:
+      - ENVOY_UID=0
+    volumes:
+      - ./envoy/global-envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "10000:10000"   # main gateway (FR-01: единая точка входа)
+      - "19000:9901"    # admin API for Prometheus
+    depends_on:
+      zone1-envoy:
+        condition: service_healthy
+      zone2-envoy:
+        condition: service_healthy
+    networks:
+      - global-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9901' 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  # ── Tools (profile: tools) ───────────────────────────────────────────────────
+  # Run with:  docker compose --profile tools run --rm traffic-gen [flags]
+  #            docker compose --profile tools run --rm failure-runner zone1-full
+
+  traffic-gen:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: cmd/traffic-gen/Dockerfile
+    networks:
+      - global-net
+    depends_on:
+      global-envoy:
+        condition: service_healthy
+
+  failure-runner:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: cmd/failure-runner/Dockerfile
+    # Mount the container socket so failure-runner can stop/start sibling containers.
+    # Docker:          /var/run/docker.sock  (default)
+    # Podman rootless: set DOCKER_SOCKET in .env to point to podman socket, e.g.:
+    #   DOCKER_SOCKET=/run/user/1000/podman/podman.sock
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    networks:
+      - global-net
+    depends_on:
+      global-envoy:
+        condition: service_healthy
 
 networks:
   global-net:
