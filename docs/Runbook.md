@@ -26,8 +26,9 @@
 | Grafana | http://localhost:3000/d/traffic-geo |
 | Consul DC1 | http://localhost:8500 |
 | Consul DC2 | http://localhost:8501 |
-| Envoy admin DC1 | http://localhost:9901 |
-| Envoy admin DC2 | http://localhost:9902 |
+| Envoy admin (global) | http://localhost:19000 |
+| Envoy admin (zone1) | http://localhost:19001 |
+| Envoy admin (zone2) | http://localhost:19002 |
 | Jaeger | http://localhost:16686 |
 | Канал алертов | #traffic-alerts |
 | Инциденты | #incidents |
@@ -58,13 +59,14 @@
 
 ```bash
 # Проверь состояние всех контейнеров
-docker-compose ps
+docker compose ps
 
-# Посмотри на Envoy — куда идут запросы
-curl -s http://localhost:9901/clusters | grep -E "(health|cx_active|rq_error)"
+# Посмотри на Envoy — куда идут запросы (global-envoy видит оба zone-envoy)
+curl -s http://localhost:19000/clusters | grep -E "(health|cx_active|rq_error)"
 
-# То же для DC2
-curl -s http://localhost:9902/clusters | grep -E "(health|cx_active|rq_error)"
+# zone1-envoy и zone2-envoy видят свои app-инстансы
+curl -s http://localhost:19001/clusters | grep -E "(health|cx_active|rq_error)"
+curl -s http://localhost:19002/clusters | grep -E "(health|cx_active|rq_error)"
 ```
 
 Открой Grafana → панель **"Error Rate by Service"** — найди конкретный сервис с ошибками.
@@ -86,18 +88,18 @@ curl -s http://localhost:8501/v1/health/state/critical | jq '.[].ServiceName'
 
 **Если сервис упал в обоих ЦОД:**
 ```bash
-# Перезапусти конкретный сервис (замени service-a на нужный)
-docker-compose restart service-a-dc1 service-a-dc2
+# Перезапусти app-инстансы
+docker compose restart app-zone1-1 app-zone1-2 app-zone2-1 app-zone2-2
 
-# Проверь логи
-docker-compose logs --tail=50 service-a-dc1
+# Проверь логи конкретного инстанса
+docker compose logs --tail=50 app-zone1-1
 ```
 
 **Если Envoy не отвечает:**
 ```bash
-docker-compose restart envoy-dc1
+docker compose restart zone1-envoy zone2-envoy global-envoy
 # Дождись готовности (~10с), проверь
-curl -s http://localhost:9901/ready
+curl -s http://localhost:19000/ready
 ```
 
 ---
@@ -111,11 +113,11 @@ curl -s http://localhost:9901/ready
 ### Шаг 1 — Подтверди, что failover работает корректно
 
 ```bash
-# Error rate должен быть < 5% (трафик идёт через DC2)
-curl -s http://localhost:9901/stats | grep "upstream_rq_5xx"
+# Error rate должен быть < 5% (трафик идёт через zone2)
+curl -s http://localhost:19000/stats | grep "upstream_rq_5xx"
 
-# Проверь, что DC2 принимает нагрузку
-curl -s http://localhost:9902/stats | grep "upstream_rq_total"
+# Проверь, что zone2 принимает нагрузку
+curl -s http://localhost:19002/stats | grep "upstream_rq_total"
 ```
 
 Grafana → **"Traffic Distribution by DC"** — DC2 должен показывать ~100% трафика.
@@ -126,18 +128,18 @@ Grafana → **"Traffic Distribution by DC"** — DC2 должен показыв
 # Какие сервисы упали в DC1?
 curl -s http://localhost:8500/v1/health/state/critical | jq '.[].ServiceName'
 
-# Логи упавшего сервиса
-docker-compose logs --tail=100 <service-name>-dc1
+# Логи упавших инстансов zone1
+docker compose logs --tail=100 app-zone1-1 app-zone1-2
 
-# Состояние контейнеров DC1
-docker-compose ps | grep dc1
+# Состояние контейнеров zone1
+docker compose ps | grep zone1
 ```
 
-### Шаг 3 — Восстанови DC1
+### Шаг 3 — Восстанови zone1
 
 ```bash
-# Перезапусти упавшие сервисы
-docker-compose start <service-name>-dc1
+# Перезапусти упавшие инстансы
+docker compose start app-zone1-1 app-zone1-2
 
 # Дождись, пока Consul зафиксирует восстановление (~10с после health-check)
 watch -n 2 'curl -s http://localhost:8500/v1/health/state/critical | jq length'
@@ -146,7 +148,7 @@ watch -n 2 'curl -s http://localhost:8500/v1/health/state/critical | jq length'
 
 ### Шаг 4 — Проверь failback
 
-После восстановления DC1 Envoy автоматически начнёт возвращать трафик.
+После восстановления zone1 Envoy автоматически начнёт возвращать трафик.
 Grafana → **"Traffic Distribution by DC"** — ожидай плавное возвращение к ~50/50.
 
 > Резкого переключения нет — это нормально. Смотри на error rate: если < 1%, всё хорошо.
@@ -204,7 +206,7 @@ docker-compose up -d
 ### Шаг 1 — Быстрая диагностика
 
 ```bash
-docker-compose ps
+docker compose ps
 
 # Проверь ресурсы хоста
 df -h          # диск
@@ -215,19 +217,21 @@ docker stats --no-stream  # CPU/MEM по контейнерам
 ### Шаг 2 — Полный перезапуск
 
 ```bash
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 
 # Ждёшь ~30с, проверяешь
-curl -s http://localhost:9901/ready  # должен вернуть "LIVE"
-curl -s http://localhost:9902/ready
+curl -s http://localhost:19000/ready  # global-envoy — должен вернуть "LIVE"
+curl -s http://localhost:19001/ready  # zone1-envoy
+curl -s http://localhost:19002/ready  # zone2-envoy
 ```
 
 ### Шаг 3 — Проверь порядок старта
 
-Consul должен стартовать раньше Envoy. Если Envoy не получил конфиг:
+Порядок старта задан через `depends_on` в docker-compose: app → zone-envoy → global-envoy.
+Если global-envoy не получил upstream:
 ```bash
-docker-compose restart envoy-dc1 envoy-dc2
+docker compose restart zone1-envoy zone2-envoy global-envoy
 ```
 
 > Клиенты получат 503 пока система недоступна. После восстановления запросы пойдут автоматически.
@@ -244,10 +248,10 @@ Grafana → **"Latency by Service"** — найди сервис с аномал
 
 ```bash
 # Посмотри на очереди в Envoy
-curl -s http://localhost:9901/stats | grep "pending"
+curl -s http://localhost:19000/stats | grep "pending"
 
 # Проверь активные соединения
-curl -s http://localhost:9901/stats | grep "cx_active"
+curl -s http://localhost:19000/stats | grep "cx_active"
 ```
 
 ### Шаг 2 — Jaeger: найди медленные трейсы
@@ -265,10 +269,10 @@ Service: `envoy` → Sort by "Longest First" → смотри, на каком s
 
 ```bash
 # CPU/MEM конкретного контейнера
-docker stats service-a-dc1 --no-stream
+docker stats app-zone1-1 --no-stream
 
-# Перезапуск конкретного сервиса
-docker-compose restart <service-name>-dc1
+# Перезапуск конкретного инстанса
+docker compose restart app-zone1-1
 ```
 
 ---
@@ -312,7 +316,7 @@ docker-compose logs --tail=20 ml-module | grep -i redis
 ### Быстрый откат через feature flag (< 2 минут)
 
 ```bash
-GEO_FAILOVER_ENABLED=false docker-compose up -d envoy-dc1 envoy-dc2
+GEO_FAILOVER_ENABLED=false docker compose up -d zone1-envoy zone2-envoy global-envoy
 ```
 
 ### Полный откат к предыдущей версии (< 15 минут)
@@ -323,11 +327,11 @@ git log --oneline -5       # найди нужный коммит
 git revert HEAD            # или конкретный хэш
 
 # 2. Пересобери и подними
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d --build
 
 # 3. Проверь
-curl -s http://localhost:9901/ready
+curl -s http://localhost:19000/ready
 curl -s http://localhost:8500/v1/health/state/critical | jq length  # должно быть 0
 
 # 4. Уведоми в #incidents
@@ -339,10 +343,10 @@ curl -s http://localhost:8500/v1/health/state/critical | jq length  # должн
 
 ```bash
 # Состояние всех контейнеров
-docker-compose ps
+docker compose ps
 
 # Логи компонента (live)
-docker-compose logs --tail=100 -f <service-name>
+docker compose logs --tail=100 -f app-zone1-1
 
 # Все сервисы в Consul (DC1)
 curl -s http://localhost:8500/v1/catalog/services | jq 'keys'
@@ -351,16 +355,16 @@ curl -s http://localhost:8500/v1/catalog/services | jq 'keys'
 curl -s http://localhost:8500/v1/health/state/any | jq '.[] | {name: .ServiceName, status: .Status}'
 
 # Envoy clusters и их статус
-curl -s http://localhost:9901/clusters
+curl -s http://localhost:19000/clusters
 
 # Envoy конфигурация (типы секций)
-curl -s http://localhost:9901/config_dump | jq '.configs[] | .["@type"]'
+curl -s http://localhost:19000/config_dump | jq '.configs[] | .["@type"]'
 
 # Статистика запросов Envoy
-curl -s http://localhost:9901/stats | grep -E "(rq_total|rq_5xx|rq_timeout)"
+curl -s http://localhost:19000/stats | grep -E "(rq_total|rq_5xx|rq_timeout)"
 
 # Перезапуск только Envoy (без даунтайма сервисов)
-docker-compose restart envoy-dc1 envoy-dc2
+docker compose restart zone1-envoy zone2-envoy global-envoy
 ```
 
 ---

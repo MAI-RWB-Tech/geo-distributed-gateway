@@ -18,6 +18,7 @@ static_resources:
                     - name: backend
                       domains: ["*"]
                       routes:
+                        # Zone pinning via x-geo header — bypass LB, go directly.
                         - match:
                             headers:
                               - name: x-geo
@@ -32,23 +33,77 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: zone2_envoy
+                        # Default: locality-aware load balancing across both DCs.
+                        # Normal state  → equal weight 50/50 (locality_weighted_lb_config).
+                        # One DC down   → outlier detection ejects its endpoint;
+                        #                 retry and new requests go to the surviving DC.
                         - match:
                             prefix: "/"
                           route:
-                            weighted_clusters:
-                              clusters:
-                                - name: zone1_envoy
-                                  weight: 50
-                                - name: zone2_envoy
-                                  weight: 50
-                              total_weight: 100
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
+    # Main cluster with two geographic localities — DC-1 and DC-2.
+    #
+    # locality_weighted_lb_config distributes traffic proportionally to
+    # per-locality weights (both set to 1 → 50/50 in normal conditions).
+    # When outlier detection ejects all endpoints of one locality, Envoy
+    # automatically routes 100% to the remaining healthy locality.
+    # Retries also pick from healthy endpoints, so cross-DC failover is
+    # seamless within a single request.
+    - name: geo_cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      # Locality-weighted LB: respect the per-locality weight field.
+      # Without this, Envoy ignores locality labels and does flat round-robin.
+      common_lb_config:
+        locality_weighted_lb_config: {}
+      outlier_detection:
+        consecutive_5xx: 2
+        consecutive_gateway_failure: 2
+        interval: 1s
+        base_ejection_time: 60s
+        max_ejection_percent: 100
+        enforcing_consecutive_5xx: 100
+        enforcing_consecutive_gateway_failure: 100
+      load_assignment:
+        cluster_name: geo_cluster
+        endpoints:
+          # DC-1 (zone1) — locality label makes the DC boundary explicit.
+          - locality:
+              region: dc1
+              zone: zone1
+            load_balancing_weight: 1
+            lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: zone1-envoy
+                      port_value: 10000
+          # DC-2 (zone2)
+          - locality:
+              region: dc2
+              zone: zone2
+            load_balancing_weight: 1
+            lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: zone2-envoy
+                      port_value: 10000
+
+    # Pinned clusters for x-geo header routing.
     - name: zone1_envoy
-      connect_timeout: 0.25s
+      connect_timeout: 1s
       type: STRICT_DNS
       lb_policy: ROUND_ROBIN
       load_assignment:
@@ -60,8 +115,9 @@ static_resources:
                     socket_address:
                       address: zone1-envoy
                       port_value: 10000
+
     - name: zone2_envoy
-      connect_timeout: 0.25s
+      connect_timeout: 1s
       type: STRICT_DNS
       lb_policy: ROUND_ROBIN
       load_assignment:
