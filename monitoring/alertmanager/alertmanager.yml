@@ -1,0 +1,42 @@
+global:
+  resolve_timeout: 5m
+
+# Маршрутизация: critical → отдельная группа с быстрым group_wait
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+  receiver: 'default'
+  routes:
+    - matchers:
+        - severity = "critical"
+      group_wait: 5s
+      repeat_interval: 15m
+      receiver: 'critical'
+
+receivers:
+  # Алерты видны в Alertmanager UI: http://localhost:9093
+  # и в Grafana: http://localhost:3000/alerting
+  # Для подключения Slack/PagerDuty — раскомментируй нужный блок ниже.
+  - name: 'default'
+    # slack_configs:
+    #   - api_url: 'https://hooks.slack.com/services/XXX/YYY/ZZZ'
+    #     channel: '#traffic-alerts'
+    #     title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+  - name: 'critical'
+    # slack_configs:
+    #   - api_url: 'https://hooks.slack.com/services/XXX/YYY/ZZZ'
+    #     channel: '#incidents'
+    #     title: '[CRITICAL] {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}\nRunbook: {{ .Annotations.runbook }}{{ end }}'
+
+inhibit_rules:
+  # Если RollbackRequired активен — подавляем HighErrorRate (дублирующий)
+  - source_matchers:
+      - alertname = "RollbackRequired"
+    target_matchers:
+      - alertname = "HighErrorRate"
+    equal: ['job']
