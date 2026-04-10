@@ -1,0 +1,473 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["envoy", "geo", "traffic"],
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Geo-Distributed Gateway",
+  "uid": "traffic-geo",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "RPS (global)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[1m]))",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": "RPS"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "green", "value": 50 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error Rate (5xx %)",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_xx{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\",envoy_response_code_class=\"5\"}[2m])) / sum(rate(envoy_http_downstream_rq_total{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[2m])) * 100",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": "error rate"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "p99 Latency (ms)",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(envoy_http_downstream_rq_time_bucket{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[5m])) by (le))",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": "p99"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 200 },
+              { "color": "red", "value": 500 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Failover Active (ejected endpoints)",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(envoy_cluster_outlier_detection_ejections_active{job=\"envoy-global\",envoy_cluster_name=\"geo_cluster\"})",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": "ejected"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "OK", "color": "green", "index": 0 }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "RPS по зонам",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "global (total)"
+        },
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"envoy-zone1\",envoy_http_conn_manager_prefix=\"zone1_ingress\"}[1m]))",
+          "refId": "B",
+          "legendFormat": "zone1"
+        },
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"envoy-zone2\",envoy_http_conn_manager_prefix=\"zone2_ingress\"}[1m]))",
+          "refId": "C",
+          "legendFormat": "zone2"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "global (total)" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "zone1" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "zone2" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Error Rate по зонам (%)",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_xx{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\",envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_http_downstream_rq_total{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[1m])) * 100",
+          "refId": "A",
+          "legendFormat": "global 5xx %"
+        },
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_xx{job=\"envoy-zone1\",envoy_http_conn_manager_prefix=\"zone1_ingress\",envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_http_downstream_rq_total{job=\"envoy-zone1\",envoy_http_conn_manager_prefix=\"zone1_ingress\"}[1m])) * 100",
+          "refId": "B",
+          "legendFormat": "zone1 5xx %"
+        },
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_xx{job=\"envoy-zone2\",envoy_http_conn_manager_prefix=\"zone2_ingress\",envoy_response_code_class=\"5\"}[1m])) / sum(rate(envoy_http_downstream_rq_total{job=\"envoy-zone2\",envoy_http_conn_manager_prefix=\"zone2_ingress\"}[1m])) * 100",
+          "refId": "C",
+          "legendFormat": "zone2 5xx %"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Latency percentiles — global-envoy (ms)",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(envoy_http_downstream_rq_time_bucket{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[5m])) by (le))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(envoy_http_downstream_rq_time_bucket{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[5m])) by (le))",
+          "refId": "B",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(envoy_http_downstream_rq_time_bucket{job=\"envoy-global\",envoy_http_conn_manager_prefix=\"ingress_http\"}[5m])) by (le))",
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "spanNulls": false }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p50" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Traffic Distribution by Zone",
+      "gridPos": { "x": 12, "y": 12, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"envoy-zone1\",envoy_http_conn_manager_prefix=\"zone1_ingress\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "zone1",
+          "instant": true
+        },
+        {
+          "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"envoy-zone2\",envoy_http_conn_manager_prefix=\"zone2_ingress\"}[5m]))",
+          "refId": "B",
+          "legendFormat": "zone2",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "pieType": "donut",
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "zone1" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "zone2" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Outlier Ejections (Failover Events)",
+      "gridPos": { "x": 18, "y": 12, "w": 6, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(envoy_cluster_outlier_detection_ejections_active{job=\"envoy-global\",envoy_cluster_name=\"geo_cluster\"})",
+          "refId": "A",
+          "legendFormat": "active ejections (geo_cluster)"
+        },
+        {
+          "expr": "sum(rate(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"envoy-zone1\",envoy_cluster_name=\"app_zone1_cluster\"}[1m]))",
+          "refId": "B",
+          "legendFormat": "enforced/s (zone1)"
+        },
+        {
+          "expr": "sum(rate(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"envoy-zone2\",envoy_cluster_name=\"app_zone2_cluster\"}[1m]))",
+          "refId": "C",
+          "legendFormat": "enforced/s (zone2)"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 20, "drawStyle": "bars", "spanNulls": false }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "active ejections (geo_cluster)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              { "id": "custom.drawStyle", "value": "line" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Active Upstream Connections",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (envoy_cluster_name) (envoy_cluster_upstream_cx_active{job=\"envoy-global\"})",
+          "refId": "A",
+          "legendFormat": "{{ envoy_cluster_name }}"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "lineWidth": 1, "fillOpacity": 10 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Upstream Pending Requests",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (envoy_cluster_name) (envoy_cluster_upstream_rq_pending_active{job=\"envoy-global\"})",
+          "refId": "A",
+          "legendFormat": "{{ envoy_cluster_name }} pending"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "lineWidth": 1, "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

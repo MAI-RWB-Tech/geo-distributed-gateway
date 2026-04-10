@@ -1,0 +1,145 @@
+groups:
+  - name: geo-gateway.traffic
+    interval: 15s
+    rules:
+
+      # ── Error Rate ────────────────────────────────────────────────────────────
+      # Runbook: error_rate > 5% на глобальном Envoy в течение 2 минут
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(envoy_http_downstream_rq_xx{
+              job="envoy-global",
+              envoy_http_conn_manager_prefix="ingress_http",
+              envoy_response_code_class="5"
+            }[2m]))
+            /
+            sum(rate(envoy_http_downstream_rq_total{
+              job="envoy-global",
+              envoy_http_conn_manager_prefix="ingress_http"
+            }[2m]))
+          ) * 100 > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error rate > 5% on global-envoy"
+          description: "5xx error rate is {{ printf \"%.1f\" $value }}% (threshold: 5%). Check Grafana: http://localhost:3000/d/traffic-geo"
+          runbook: "Runbook §1 — Высокий процент ошибок"
+
+      # ── Failover triggered ────────────────────────────────────────────────────
+      # Срабатывает когда outlier detection выбивает эндпоинты из geo_cluster
+      - alert: FailoverTriggered
+        expr: |
+          sum(envoy_cluster_outlier_detection_ejections_active{
+            job="envoy-global",
+            envoy_cluster_name="geo_cluster"
+          }) > 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Failover active — geo_cluster has ejected endpoints"
+          description: "{{ $value }} endpoint(s) ejected from geo_cluster. Traffic is being rerouted to the surviving DC."
+          runbook: "Runbook §2 — Failover сработал"
+
+      # ── p99 Latency ───────────────────────────────────────────────────────────
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(envoy_http_downstream_rq_time_bucket{
+              job="envoy-global",
+              envoy_http_conn_manager_prefix="ingress_http"
+            }[5m])) by (le)
+          ) > 500
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 latency > 500ms on global-envoy"
+          description: "p99 latency is {{ printf \"%.0f\" $value }}ms (threshold: 500ms)."
+          runbook: "Runbook §5 — Высокая задержка"
+
+      # ── Critical latency ──────────────────────────────────────────────────────
+      - alert: CriticalLatencyP99
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(envoy_http_downstream_rq_time_bucket{
+              job="envoy-global",
+              envoy_http_conn_manager_prefix="ingress_http"
+            }[5m])) by (le)
+          ) > 1000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "p99 latency > 1000ms — rollback trigger"
+          description: "p99 latency is {{ printf \"%.0f\" $value }}ms. This exceeds the rollback threshold (1000ms)."
+          runbook: "Runbook §7 — Rollback"
+
+      # ── Low RPS ───────────────────────────────────────────────────────────────
+      # Может означать: трафик не доходит до шлюза, или все сервисы упали
+      - alert: LowRequestRate
+        expr: |
+          sum(rate(envoy_http_downstream_rq_total{
+            job="envoy-global",
+            envoy_http_conn_manager_prefix="ingress_http"
+          }[1m])) < 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RPS < 100 on global-envoy"
+          description: "Current RPS: {{ printf \"%.1f\" $value }}. Expected 300–700 RPS. Either traffic dropped or gateway is degraded."
+          runbook: "Runbook §1 — Высокий процент ошибок"
+
+      # ── High RPS ──────────────────────────────────────────────────────────────
+      - alert: HighRequestRate
+        expr: |
+          sum(rate(envoy_http_downstream_rq_total{
+            job="envoy-global",
+            envoy_http_conn_manager_prefix="ingress_http"
+          }[1m])) > 1200
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RPS > 1200 on global-envoy"
+          description: "Current RPS: {{ printf \"%.0f\" $value }} (SLA max: 1200 rps)."
+
+      # ── Zone health ───────────────────────────────────────────────────────────
+      # Prometheus не может скрейпить Envoy зоны — зона полностью недоступна
+      - alert: ZoneDown
+        expr: up{job=~"envoy-zone1|envoy-zone2"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Zone Envoy {{ $labels.job }} is unreachable"
+          description: "Prometheus cannot scrape {{ $labels.instance }}. Zone Envoy is down."
+          runbook: "Runbook §4 — Полный отказ"
+
+  - name: geo-gateway.rollback
+    rules:
+      # Комбо-условие из Runbook §7: error > 10% + потеря запросов
+      - alert: RollbackRequired
+        expr: |
+          (
+            sum(rate(envoy_http_downstream_rq_xx{
+              job="envoy-global",
+              envoy_http_conn_manager_prefix="ingress_http",
+              envoy_response_code_class="5"
+            }[5m]))
+            /
+            sum(rate(envoy_http_downstream_rq_total{
+              job="envoy-global",
+              envoy_http_conn_manager_prefix="ingress_http"
+            }[5m]))
+          ) * 100 > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ROLLBACK REQUIRED — error rate > 10% for 5 minutes"
+          description: "Error rate: {{ printf \"%.1f\" $value }}%. Trigger rollback: GEO_FAILOVER_ENABLED=false docker compose up -d zone1-envoy zone2-envoy global-envoy"
+          runbook: "Runbook §7 — Rollback"

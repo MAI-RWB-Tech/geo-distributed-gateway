@@ -1,0 +1,38 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    system: geo-distributed-gateway
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Global entry-point Envoy — collects cross-DC metrics (geo_cluster, ingress_http)
+  - job_name: 'envoy-global'
+    metrics_path: '/stats/prometheus'
+    static_configs:
+      - targets: ['global-envoy:9901']
+        labels:
+          envoy_instance: 'global'
+
+  # Zone 1 regional Envoy — collects zone1_ingress + app_zone1_cluster metrics
+  - job_name: 'envoy-zone1'
+    metrics_path: '/stats/prometheus'
+    static_configs:
+      - targets: ['zone1-envoy:9901']
+        labels:
+          envoy_instance: 'zone1'
+
+  # Zone 2 regional Envoy — collects zone2_ingress + app_zone2_cluster metrics
+  - job_name: 'envoy-zone2'
+    metrics_path: '/stats/prometheus'
+    static_configs:
+      - targets: ['zone2-envoy:9901']
+        labels:
+          envoy_instance: 'zone2'
