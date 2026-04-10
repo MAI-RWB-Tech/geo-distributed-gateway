@@ -1,4 +1,4 @@
-FROM docker.io/golang:1.22 AS builder
+FROM docker.io/golang:1.26 AS builder
 WORKDIR /src
 
 # Copy only the modules needed for the app service.
@@ -8,7 +8,7 @@ COPY sdk/ ./sdk/
 COPY app/ ./app/
 
 # Inline go.work so local replace resolves without external network.
-RUN printf 'go 1.22\n\nuse (\n\t./app\n\t./sdk\n)\n' > go.work && \
+RUN printf 'go 1.26\n\nuse (\n\t./app\n\t./sdk\n)\n' > go.work && \
     touch go.work.sum
 
 WORKDIR /src/app

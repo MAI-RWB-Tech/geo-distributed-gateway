@@ -1,10 +1,10 @@
-FROM golang:1.22 AS builder
+FROM golang:1.26 AS builder
 WORKDIR /src
 
 COPY sdk/ ./sdk/
 COPY cmd/failure-runner/ ./cmd/failure-runner/
 
-RUN printf 'go 1.22\n\nuse (\n\t./cmd/failure-runner\n\t./sdk\n)\n' > go.work && \
+RUN printf 'go 1.26\n\nuse (\n\t./cmd/failure-runner\n\t./sdk\n)\n' > go.work && \
     touch go.work.sum
 
 WORKDIR /src/cmd/failure-runner

@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -184,11 +185,13 @@ func restoreContainers(runtime string, containers []string, wasPaused bool) erro
 
 // probeFor sends requests at rps for dur and records results into rec.
 func probeFor(ctx context.Context, url string, rps int, dur time.Duration, rec *stats.Recorder) {
-	c := client.New(client.Options{BaseURL: strings.TrimSuffix(url, "/ping"), Timeout: 5 * time.Second})
-	path := "/ping"
-	if idx := strings.LastIndex(url, "/"); idx >= 0 {
-		path = url[idx:]
+	u, err := url.Parse(url)
+	if err != nil || u.Host == "" {
+		u = &url.URL{Scheme: "http", Host: "localhost:10000", Path: "/ping"}
 	}
+	path := u.Path
+	baseURL := u.Scheme + "://" + u.Host
+	c := client.New(client.Options{BaseURL: baseURL, Timeout: 5 * time.Second})
 
 	ticker := time.NewTicker(time.Second / time.Duration(rps))
 	defer ticker.Stop()

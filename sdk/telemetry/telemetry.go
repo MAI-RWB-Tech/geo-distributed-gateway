@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -37,12 +38,14 @@ type Event struct {
 }
 
 // Collector publishes events to an io.Writer as JSON lines.
+// All methods are safe for concurrent use.
 type Collector struct {
 	service  string
 	instance string
 	zone     string
 	out      io.Writer
 	enc      *json.Encoder
+	mu       sync.Mutex
 }
 
 // New creates a Collector for a service.
@@ -70,6 +73,8 @@ func (c *Collector) emit(e Event) {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	_ = c.enc.Encode(e) // best-effort; logging failures are non-fatal
 }
 

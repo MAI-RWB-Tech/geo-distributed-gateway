@@ -23,7 +23,7 @@ if [ -z "${CONTAINER_RUNTIME:-}" ]; then
   fi
 fi
 
-GO_IMAGE="golang:1.22"
+GO_IMAGE="golang:1.26"
 
 # Detect host platform for cross-compilation.
 HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
