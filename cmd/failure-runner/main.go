@@ -1,6 +1,6 @@
 // failure-runner orchestrates failure injection scenarios against the geo-distributed gateway.
 // It uses the container runtime CLI (podman/docker stop/start/pause/unpause)
-// and collects Envoy admin metrics before and after each scenario to measure impact.
+// and queries Prometheus before and after each scenario to measure impact.
 //
 // Usage:
 //
@@ -20,23 +20,26 @@
 // Flags:
 //
 //	-runtime        Container runtime: podman or docker (default: podman)
-//	-admin1         Zone1 Envoy admin URL (default: http://localhost:19001)
-//	-admin2         Zone2 Envoy admin URL (default: http://localhost:19002)
+//	-prometheus     Prometheus base URL (default: http://localhost:9090)
 //	-restore-after  Auto-restore containers after this duration (0 = manual, default: 30s)
 //	-probe-url      Gateway URL to probe during scenario (default: http://localhost:10000/ping)
 //	-probe-rps      Probe RPS during scenario (default: 20)
+//	-zone           Zone containers: -zone name=c1,c2 (repeatable, any number of zones)
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -45,10 +48,30 @@ import (
 	"github.com/geo-distributed-gateway/sdk/stats"
 )
 
-// zone container groups known to docker-compose.
-var zoneContainers = map[string][]string{
-	"zone1": {"app-zone1-1", "app-zone1-2"},
-	"zone2": {"app-zone2-1", "app-zone2-2"},
+// zonesFlag is a repeatable -zone flag that builds a map of zone → containers.
+// Each use has the form:  -zone name=container1,container2
+type zonesFlag map[string][]string
+
+func (z zonesFlag) String() string {
+	keys := make([]string, 0, len(z))
+	for k := range z {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(z))
+	for _, k := range keys {
+		parts = append(parts, k+"="+strings.Join(z[k], ","))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (z zonesFlag) Set(s string) error {
+	name, list, ok := strings.Cut(s, "=")
+	if !ok || name == "" || list == "" {
+		return fmt.Errorf("want zone=container1,container2, got %q", s)
+	}
+	z[name] = strings.Split(list, ",")
+	return nil
 }
 
 type scenario struct {
@@ -69,12 +92,16 @@ var scenarios = map[string]scenario{
 }
 
 func main() {
-	runtime := flag.String("runtime", "podman", "Container runtime: podman or docker")
-	admin1 := flag.String("admin1", "http://localhost:19001", "Zone1 Envoy admin URL")
-	admin2 := flag.String("admin2", "http://localhost:19002", "Zone2 Envoy admin URL")
+	runtime      := flag.String("runtime", "podman", "Container runtime: podman or docker")
+	prometheusURL := flag.String("prometheus", "http://localhost:9090", "Prometheus base URL")
 	restoreAfter := flag.Duration("restore-after", 30*time.Second, "Auto-restore after duration (0 = manual)")
-	probeURL := flag.String("probe-url", "http://localhost:10000/ping", "Gateway URL to probe during scenario")
-	probeRPS := flag.Int("probe-rps", 20, "Probe requests per second during scenario")
+	probeURL     := flag.String("probe-url", "http://localhost:10000/ping", "Gateway URL to probe during scenario")
+	probeRPS     := flag.Int("probe-rps", 20, "Probe requests per second during scenario")
+	zones := zonesFlag{
+		"zone1": {"app-zone1-1", "app-zone1-2"},
+		"zone2": {"app-zone2-1", "app-zone2-2"},
+	}
+	flag.Var(zones, "zone", "Zone containers: -zone name=c1,c2 (repeatable)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -98,8 +125,8 @@ func main() {
 
 	// --- Phase 1: Baseline metrics ---
 	fmt.Println("--- Baseline (before failure) ---")
-	baseline := collectEnvoyStats(*admin1, *admin2)
-	printStats("baseline", baseline)
+	baseline, baseAvail := collectGatewayStats(*prometheusURL)
+	printGatewayStats("baseline", baseline, baseAvail)
 
 	baseRec := &stats.Recorder{}
 	probeFor(ctx, *probeURL, *probeRPS, 10*time.Second, baseRec)
@@ -107,7 +134,7 @@ func main() {
 	fmt.Printf("baseline probe: %s\n\n", baseSnap.Report(10*time.Second))
 
 	// --- Phase 2: Inject failure ---
-	containers := targetContainers(sc)
+	containers := targetContainers(sc, zones)
 	fmt.Printf("--- Injecting failure: %v ---\n", containers)
 	if err := injectFailure(*runtime, containers, sc.pause); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to inject: %v\n", err)
@@ -135,24 +162,27 @@ func main() {
 	// --- Phase 5: Post-restore metrics ---
 	time.Sleep(3 * time.Second) // give Envoy time to see healthy upstreams
 	fmt.Println("\n--- Post-restore (after failover + recovery) ---")
-	postStats := collectEnvoyStats(*admin1, *admin2)
-	printStats("post-restore", postStats)
+	postStats, postAvail := collectGatewayStats(*prometheusURL)
+	printGatewayStats("post-restore", postStats, postAvail)
 
 	// --- Summary ---
 	fmt.Printf("\n=== Summary: %s ===\n", sc.name)
 	fmt.Printf("baseline   : %s\n", baseSnap.Report(10*time.Second))
 	fmt.Printf("during fail: %s\n", failureSnap.Report(probeDur))
+	if postAvail {
+		fmt.Printf("post-restore (Prometheus): error_rate=%.2f%%  zone1_rps=%.1f  zone2_rps=%.1f  ejections=%.0f\n",
+			postStats.errorRatePct, postStats.zone1RPS, postStats.zone2RPS, postStats.ejections)
+	}
 	fmt.Printf("\nExpected: error_rate < 5%% (failover kicks in within Envoy retry window)\n")
 	if failureSnap.ErrorRate() < 5.0 {
 		fmt.Println("PASS: error rate within SLA during failure")
 	} else {
 		fmt.Printf("FAIL: error rate %.2f%% exceeds 5%% threshold\n", failureSnap.ErrorRate())
 	}
-
 }
 
-func targetContainers(sc scenario) []string {
-	all := zoneContainers[sc.zone]
+func targetContainers(sc scenario, zones zonesFlag) []string {
+	all := zones[sc.zone]
 	if sc.partial && len(all) > 1 {
 		return all[:len(all)/2]
 	}
@@ -184,8 +214,8 @@ func restoreContainers(runtime string, containers []string, wasPaused bool) erro
 }
 
 // probeFor sends requests at rps for dur and records results into rec.
-func probeFor(ctx context.Context, url string, rps int, dur time.Duration, rec *stats.Recorder) {
-	u, err := url.Parse(url)
+func probeFor(ctx context.Context, rawURL string, rps int, dur time.Duration, rec *stats.Recorder) {
+	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
 		u = &url.URL{Scheme: "http", Host: "localhost:10000", Path: "/ping"}
 	}
@@ -218,41 +248,84 @@ func probeFor(ctx context.Context, url string, rps int, dur time.Duration, rec *
 	}
 }
 
-type envoyStats struct {
-	zone1RX, zone2RX string // raw /stats output snippet
+// gatewayStats holds a point-in-time snapshot of key gateway metrics from Prometheus.
+type gatewayStats struct {
+	errorRatePct float64 // global 5xx error rate, percent
+	zone1RPS     float64 // inbound RPS on zone1-envoy
+	zone2RPS     float64 // inbound RPS on zone2-envoy
+	ejections    float64 // active outlier-detection ejections in geo_cluster
 }
 
-func collectEnvoyStats(admin1, admin2 string) envoyStats {
-	return envoyStats{
-		zone1RX: fetchAdminStats(admin1),
-		zone2RX: fetchAdminStats(admin2),
-	}
-}
-
-func fetchAdminStats(adminURL string) string {
-	resp, err := http.Get(adminURL + "/stats?filter=upstream_rq_total")
+// collectGatewayStats queries Prometheus for current gateway metrics.
+// Returns (stats, false) if Prometheus is unreachable.
+func collectGatewayStats(prometheusURL string) (gatewayStats, bool) {
+	// Availability check before running queries.
+	resp, err := http.Get(prometheusURL + "/-/healthy")
 	if err != nil {
-		return fmt.Sprintf("(unavailable: %v)", err)
+		return gatewayStats{}, false
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return gatewayStats{}, false
+	}
+
+	errRate, _ := queryPrometheus(prometheusURL,
+		`sum(rate(envoy_http_downstream_rq_xx{job="envoy-global",envoy_http_conn_manager_prefix="ingress_http",envoy_response_code_class="5"}[1m]))`+
+			` / sum(rate(envoy_http_downstream_rq_total{job="envoy-global",envoy_http_conn_manager_prefix="ingress_http"}[1m])) * 100`)
+	z1rps, _ := queryPrometheus(prometheusURL,
+		`sum(rate(envoy_http_downstream_rq_total{job="envoy-zone1",envoy_http_conn_manager_prefix="zone1_ingress"}[1m]))`)
+	z2rps, _ := queryPrometheus(prometheusURL,
+		`sum(rate(envoy_http_downstream_rq_total{job="envoy-zone2",envoy_http_conn_manager_prefix="zone2_ingress"}[1m]))`)
+	ejections, _ := queryPrometheus(prometheusURL,
+		`sum(envoy_cluster_outlier_detection_ejections_active{job="envoy-global",envoy_cluster_name="geo_cluster"})`)
+
+	return gatewayStats{
+		errorRatePct: errRate,
+		zone1RPS:     z1rps,
+		zone2RPS:     z2rps,
+		ejections:    ejections,
+	}, true
+}
+
+// queryPrometheus runs an instant PromQL query and returns the scalar result.
+// Returns (0, false) if the query returns no data or the value is NaN/Inf.
+func queryPrometheus(baseURL, query string) (float64, bool) {
+	resp, err := http.Get(baseURL + "/api/v1/query?query=" + url.QueryEscape(query))
+	if err != nil {
+		return 0, false
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return strings.TrimSpace(string(b))
+
+	var r struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Value [2]json.RawMessage `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || r.Status != "success" || len(r.Data.Result) == 0 {
+		return 0, false
+	}
+
+	var s string
+	if err := json.Unmarshal(r.Data.Result[0].Value[1], &s); err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
-func printStats(label string, s envoyStats) {
-	fmt.Printf("[%s] zone1-envoy stats:\n%s\n", label, indent(s.zone1RX))
-	fmt.Printf("[%s] zone2-envoy stats:\n%s\n\n", label, indent(s.zone2RX))
-}
-
-func indent(s string) string {
-	if s == "" {
-		return "  (no data)"
+func printGatewayStats(label string, s gatewayStats, available bool) {
+	if !available {
+		fmt.Printf("[%s] Prometheus unavailable — gateway stats not collected\n\n", label)
+		return
 	}
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = "  " + l
-	}
-	return strings.Join(lines, "\n")
+	fmt.Printf("[%s] error_rate=%.2f%%  zone1_rps=%.1f  zone2_rps=%.1f  ejections=%.0f\n\n",
+		label, s.errorRatePct, s.zone1RPS, s.zone2RPS, s.ejections)
 }
 
 func printUsage() {
