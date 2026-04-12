@@ -10,6 +10,9 @@ services:
     environment:
       - INSTANCE_NAME=zone1-1
       - ZONE=zone1
+      - CONFIG_FILE=/etc/service/config.json
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
     networks:
       - zone1-net
     healthcheck:
@@ -27,6 +30,9 @@ services:
     environment:
       - INSTANCE_NAME=zone1-2
       - ZONE=zone1
+      - CONFIG_FILE=/etc/service/config.json
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
     networks:
       - zone1-net
     healthcheck:
@@ -75,6 +81,9 @@ services:
     environment:
       - INSTANCE_NAME=zone2-1
       - ZONE=zone2
+      - CONFIG_FILE=/etc/service/config.json
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
     networks:
       - zone2-net
     healthcheck:
@@ -92,6 +101,9 @@ services:
     environment:
       - INSTANCE_NAME=zone2-2
       - ZONE=zone2
+      - CONFIG_FILE=/etc/service/config.json
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
     networks:
       - zone2-net
     healthcheck:

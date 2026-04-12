@@ -1,6 +1,6 @@
-module geo-distributed-app
+module github.com/geo-distributed-gateway/app
 
-go 1.22
+go 1.26
 
 require github.com/geo-distributed-gateway/sdk v0.0.0
 

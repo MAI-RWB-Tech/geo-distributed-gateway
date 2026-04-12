@@ -30,6 +30,9 @@ func (o *Options) defaults() {
 	}
 	if o.HTTPClient == nil {
 		o.HTTPClient = &http.Client{Timeout: o.Timeout}
+	} else {
+		// Apply Timeout to the provided client; transport and other settings are preserved.
+		o.HTTPClient.Timeout = o.Timeout
 	}
 }
 
