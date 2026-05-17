@@ -4,7 +4,7 @@
 |---|---|
 | **Версия API** | v1 |
 | **Base URL** | `http://localhost:10000` (локальный стенд через global-envoy) |
-| **Обновлено** | 2026-04-05 |
+| **Обновлено** | 2026-04-12 |
 
 ---
 
@@ -94,7 +94,12 @@ Host: localhost:10000
 {
   "status": "ok",
   "instance": "zone1-1",
-  "zone": "zone1"
+  "zone": "zone1",
+  "config": {
+    "request_timeout": "5s",
+    "max_retries": 3,
+    "retry_backoff": "100ms"
+  }
 }
 ```
 
@@ -102,7 +107,10 @@ Host: localhost:10000
 |---|---|---|
 | `status` | string | Всегда `"ok"` при живом инстансе |
 | `instance` | string | Имя инстанса |
-| `zone` | string | Зона инстанса |
+| `zone` | string | Текущая зона (может быть переопределена через config watcher) |
+| `config.request_timeout` | string | Текущий таймаут запроса |
+| `config.max_retries` | int | Текущее максимальное число повторов |
+| `config.retry_backoff` | string | Текущая задержка между повторами |
 
 ---
 
@@ -152,12 +160,7 @@ result, err := c.DoWithHeaders(ctx, "/ping", "user-1", "cabinet-5", map[string]s
 ```go
 import "github.com/geo-distributed-gateway/sdk/telemetry"
 
-col := telemetry.New(telemetry.Options{
-    Service:  "app",
-    Instance: "zone1-1",
-    Zone:     "zone1",
-})
-
+col := telemetry.New("app", "zone1-1", "zone1", nil) // nil → stdout
 col.Start()
 col.Request("user-1", "cabinet-5", correlationID, 200, 12*time.Millisecond)
 col.Error(correlationID, "timeout")
@@ -227,14 +230,14 @@ w.Close()
 ```go
 import "github.com/geo-distributed-gateway/sdk/stats"
 
-rec := stats.NewRecorder()
+rec := &stats.Recorder{}
 rec.Add(12*time.Millisecond, false)
-rec.Add(250*time.Millisecond, true) // isError=true
+rec.Add(250*time.Millisecond, true) // isError=true; latency ошибок не включается в гистограмму
 
 snap := rec.Snapshot()
-fmt.Println(snap.P50, snap.P95, snap.P99)
+fmt.Println(snap.P50(), snap.P95(), snap.P99())
 fmt.Println(snap.ErrorRate())
-fmt.Println(snap.Report(5 * time.Second)) // "total=2 success=1 errors=1 error_rate=50.00% rps=0.40 p50=12ms p95=250ms p99=250ms"
+fmt.Println(snap.Report(5 * time.Second)) // "total=2 success=1 errors=1 error_rate=50.00% rps=0.40 p50=12ms p95=12ms p99=12ms"
 
 rec.Reset() // сбросить для следующего окна
 ```
@@ -243,12 +246,25 @@ rec.Reset() // сбросить для следующего окна
 
 ## Envoy Admin API
 
-Используется `failure-runner` для сбора статистики.
+Доступен для ручной диагностики и используется Prometheus для scraping метрик.
 
 | URL | Описание |
 |---|---|
-| `http://localhost:19000/stats?filter=upstream_rq_total` | Статистика global-envoy |
-| `http://localhost:19001/stats?filter=upstream_rq_total` | Статистика zone1-envoy |
-| `http://localhost:19002/stats?filter=upstream_rq_total` | Статистика zone2-envoy |
+| `http://localhost:19000` | Admin UI global-envoy |
+| `http://localhost:19001` | Admin UI zone1-envoy |
+| `http://localhost:19002` | Admin UI zone2-envoy |
 
-Порты: `19000` — global-envoy, `19001` — zone1-envoy, `19002` — zone2-envoy.
+Полезные эндпоинты: `/stats`, `/clusters`, `/config_dump`, `/ready`.
+
+## Prometheus API
+
+`failure-runner` собирает статистику через Prometheus HTTP API (`-prometheus` флаг, default: `http://localhost:9090`).
+
+Используемые PromQL-запросы:
+
+| Метрика | Запрос |
+|---|---|
+| Error rate (%) | `sum(rate(envoy_http_downstream_rq_xx{job="envoy-global",...,envoy_response_code_class="5"}[1m])) / sum(rate(envoy_http_downstream_rq_total{...}[1m])) * 100` |
+| Zone1 RPS | `sum(rate(envoy_http_downstream_rq_total{job="envoy-zone1",...}[1m]))` |
+| Zone2 RPS | `sum(rate(envoy_http_downstream_rq_total{job="envoy-zone2",...}[1m]))` |
+| Активные ejections | `sum(envoy_cluster_outlier_detection_ejections_active{job="envoy-global",envoy_cluster_name="geo_cluster"})` |

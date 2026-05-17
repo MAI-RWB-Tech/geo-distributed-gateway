@@ -20,6 +20,8 @@ type Recorder struct {
 }
 
 // Add records a single result.
+// Error latencies are intentionally excluded from the histogram so that
+// percentiles (P50/P95/P99) reflect only successful request timings.
 func (r *Recorder) Add(latency time.Duration, isError bool) {
 	r.mu.Lock()
 	r.total++

@@ -3,6 +3,9 @@
 #
 # Build output
 bin/
+cmd/*/failure-runner
+cmd/*/traffic-gen
+app/service
 
 # Binaries for programs and plugins
 *.exe

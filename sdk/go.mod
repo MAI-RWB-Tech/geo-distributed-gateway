@@ -1,3 +1,3 @@
 module github.com/geo-distributed-gateway/sdk
 
-go 1.22
+go 1.26
