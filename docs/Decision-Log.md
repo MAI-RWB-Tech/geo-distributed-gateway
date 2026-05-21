@@ -34,5 +34,5 @@
 |---|---|---|---|
 | Q-001 | Нужно ли реализовать delay injection (tc netem / Envoy fault filter) для полноты сценариев failure-runner? |  | — |
 | Q-002 | Переходить ли на gRPC когда app-сервис получит proto-схему? SDK-клиент потребует замены транспортного слоя. |  | При реализации gRPC сервера |
-| Q-T1-001 | `app/go.sum` не сгенерирован — окружение исполнителя T1 не имело локального Go и доступа к `proxy.golang.org`, а `app/Dockerfile` запрещено менять (Out-of-Scope T1). Перед первым `make up` нужно вручную выполнить `cd app && go mod tidy`. Альтернатива: вшить `RUN go mod tidy` в `app/Dockerfile` шагом отдельной задачи. | maintainer репо | до первого `make up` после merge T1 |
+| Q-T1-001 | ✅ Resolved 2026-05-21: `app/go.sum` сгенерирован orchestrator-ом через `docker run --rm -v ... golang:1.26 go mod tidy` и закоммичен (см. commit `49ec474`). | maintainer репо | resolved |
 | Q-T1-002 | `docs/Runbook.md` содержит ~7 ссылок на старые имена контейнеров `app-zoneN-X` (строки 92, 95, 132, 142, 272, 275, 349). T1 их не правил — Runbook не указан в `files` плана, обновление runbook'а вне scope. Нужно завести отдельную задачу или PR на синхронизацию Runbook с новыми именами `service-{a..e}-zone{1,2}-1`. | DocOps / автор Runbook'а | до следующего релизного цикла |
