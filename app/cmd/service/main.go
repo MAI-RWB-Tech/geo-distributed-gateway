@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -162,11 +163,15 @@ func main() {
 			slog.Warn("consul: client init failed; running without registration",
 				slog.String("addr", consulAddr), slog.Any("err", err))
 		} else {
+			addr := firstNonLoopbackIPv4()
+			if addr == "" {
+				addr = instance // fallback, but Consul DNS will return CNAME
+			}
 			reg := &consulapi.AgentServiceRegistration{
 				ID:      instance,             // e.g. "service-a-zone1-1"
 				Name:    serviceName,          // e.g. "service-a"
 				Tags:    []string{zone},       // exactly one of "zone1" / "zone2"
-				Address: instance,             // Docker DNS resolves container_name → IP
+				Address: addr,                 // IP so Consul DNS returns A-record (not CNAME)
 				Port:    8080,
 				Check: &consulapi.AgentServiceCheck{
 					HTTP:                           "http://" + instance + ":8080/health",
@@ -209,4 +214,21 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown error", slog.Any("err", err))
 	}
+}
+
+func firstNonLoopbackIPv4() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() {
+			continue
+		}
+		if ip4 := ipnet.IP.To4(); ip4 != nil {
+			return ip4.String()
+		}
+	}
+	return ""
 }
