@@ -392,7 +392,7 @@ services:
   # Wired up to actual OTLP exporters in T5.
 
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/all-in-one:1.60
     container_name: jaeger
     environment:
       - COLLECTOR_OTLP_ENABLED=true
