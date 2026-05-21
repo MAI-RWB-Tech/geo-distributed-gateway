@@ -20,7 +20,7 @@ local TTL_SECONDS = 30
 local CALL_TIMEOUT_MS = 1000
 local FALLBACK_WEIGHTS = { zone1 = 0.5, zone2 = 0.5 }
 local DEFAULT_SERVICE = "service-a"
-local METADATA_NAMESPACE = "envoy.lua"
+local METADATA_NAMESPACE = "score.lua"
 local METADATA_FALLBACK_KEY = "route_fallback"
 
 local function service_from_path(path)
@@ -85,19 +85,18 @@ function envoy_on_request(request_handle)
   local weights, was_fallback = get_weights(request_handle, service)
   local zone = pick_zone(weights)
   headers:add("x-geo", zone)
-  if was_fallback then
-    -- Stamp a dynamicMetadata flag so envoy_on_response can attach the
-    -- sentinel header to the RESPONSE (request-side headers:add does not
-    -- round-trip to the client).
-    request_handle:streamInfo():dynamicMetadata():set(
-      METADATA_NAMESPACE, METADATA_FALLBACK_KEY, "true"
-    )
-  end
+  -- Note: sentinel response-header `x-route-fallback` from plan.md T6 is not
+  -- emitted. The trampoline via dynamicMetadata / filterState / request-header
+  -- round-trip is not viable in Envoy 1.36 Lua bindings:
+  --   * dynamicMetadata():get(ns) returns nil on response phase even after
+  --     set(ns, k, v) succeeded on request phase.
+  --   * After httpCall(...) the request-side headers handle becomes invalid
+  --     ("object used outside of proper scope") — can't add/remove headers.
+  -- Fallback occurrences are visible through structured warn-logs above:
+  --   `docker logs global-envoy | grep "score:.*fallback"`.
+  -- See DL-T6-004.
 end
 
 function envoy_on_response(response_handle)
-  local md = response_handle:streamInfo():dynamicMetadata():get(METADATA_NAMESPACE)
-  if md and md[METADATA_FALLBACK_KEY] == "true" then
-    response_handle:headers():add("x-route-fallback", "true")
-  end
+  -- No-op in Envoy 1.36; see envoy_on_request comment about trampoline.
 end
