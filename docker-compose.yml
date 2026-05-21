@@ -517,6 +517,8 @@ services:
     build:
       context: .
       dockerfile: cmd/traffic-gen/Dockerfile
+    environment:
+      - OTLP_ENDPOINT=jaeger:4318
     networks:
       - global-net
     depends_on:

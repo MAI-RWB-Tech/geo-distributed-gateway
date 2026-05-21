@@ -30,6 +30,7 @@ import (
 
 	"github.com/geo-distributed-gateway/sdk/client"
 	"github.com/geo-distributed-gateway/sdk/stats"
+	"github.com/geo-distributed-gateway/sdk/telemetry"
 )
 
 func main() {
@@ -75,11 +76,17 @@ func main() {
 		extraHeaders = map[string]string{"x-geo": *zone}
 	}
 
-	c := client.New(client.Options{BaseURL: *url, Timeout: 5 * time.Second})
-	rec := &stats.Recorder{}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	shutdownTracer, err := telemetry.InitTracer(ctx, "traffic-gen", "client", os.Getenv("OTLP_ENDPOINT"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tracer init failed:", err)
+	}
+	defer shutdownTracer(context.Background())
+
+	c := client.New(client.Options{BaseURL: *url, Timeout: 5 * time.Second})
+	rec := &stats.Recorder{}
 
 	ticker := time.NewTicker(time.Second / time.Duration(*rps))
 	defer ticker.Stop()
