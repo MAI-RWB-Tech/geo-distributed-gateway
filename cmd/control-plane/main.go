@@ -28,10 +28,17 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
+
+	"github.com/geo-distributed-gateway/sdk/config"
 )
 
 // Snapshot is the in-memory routing-policy snapshot.
@@ -70,10 +77,20 @@ type state struct {
 	lastSuccess atomic.Int64 // unix nanos of last successful pull; 0 means "never"
 	successes   atomic.Int64
 	errors      atomic.Int64
+
+	// Redis publish counters partitioned by (service, result).
+	// We don't know services up-front, so guard with a mutex; cardinality is
+	// small (5 services × 2 outcomes), reads happen only on /metrics scrape.
+	pubMu       sync.Mutex
+	pubSuccess  map[string]int64
+	pubErrors   map[string]int64
 }
 
 func newState() *state {
-	s := &state{}
+	s := &state{
+		pubSuccess: map[string]int64{},
+		pubErrors:  map[string]int64{},
+	}
 	// Initial snapshot is empty but valid — graceful degradation per plan T4 step 4.
 	s.snap.Store(Snapshot{
 		Version:    0,
@@ -85,6 +102,18 @@ func newState() *state {
 }
 
 func (s *state) get() Snapshot { return s.snap.Load().(Snapshot) }
+
+// recordPublish updates the per-service Redis-publish counter. Cardinality
+// is small (one entry per service), so a single mutex is fine.
+func (s *state) recordPublish(service string, ok bool) {
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	if ok {
+		s.pubSuccess[service]++
+	} else {
+		s.pubErrors[service]++
+	}
+}
 
 func main() {
 	mlURL := flag.String("ml-url", "", "ML analyzer base URL (env: ML_URL)")
@@ -123,7 +152,26 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	go pollLoop(ctx, st, *mlURL, *pollInterval)
+	// Redis pub/sub publisher: best-effort. An empty/unparseable REDIS_URL or
+	// a connect failure must NOT take the service down — Control Plane keeps
+	// serving /config, /healthz, /metrics. T7 acceptance: when Redis is down,
+	// stub services keep working; on Redis recovery, publishes resume on the
+	// next pull cycle. A nil publisher signals "skip publish entirely".
+	var publisher *redisPublisher
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		p, err := newRedisPublisher(redisURL)
+		if err != nil {
+			slog.Warn("redis publisher disabled", slog.String("url", redisURL), slog.Any("err", err))
+		} else {
+			publisher = p
+			defer publisher.Close()
+			slog.Info("redis publisher ready", slog.String("url", redisURL))
+		}
+	} else {
+		slog.Warn("REDIS_URL is empty; routing hints will not be broadcast")
+	}
+
+	go pollLoop(ctx, st, *mlURL, *pollInterval, publisher)
 
 	go func() {
 		slog.Info("control-plane starting",
@@ -150,8 +198,25 @@ func main() {
 // It runs the first pull immediately so /config has fresh data well before
 // the first tick (default 30s) elapses, but failures during this first pull
 // are non-fatal: the empty-snapshot initial state remains in place.
-func pollLoop(ctx context.Context, st *state, mlURL string, interval time.Duration) {
+//
+// On every successful pull, the loop also broadcasts the freshly stored
+// snapshot to Redis Pub/Sub (T7). The first successful pull after restart
+// always publishes (no previous state to compare); subsequent pulls publish
+// only when (weights, rate_limits) actually changed — see publishIfChanged.
+func pollLoop(ctx context.Context, st *state, mlURL string, interval time.Duration, publisher *redisPublisher) {
 	client := &http.Client{Timeout: 10 * time.Second}
+
+	// firstPublishDone flips after the first publish broadcast (success or
+	// partial). Until then we always publish, regardless of content equality
+	// with the empty initial snapshot. This guarantees acceptance "5 messages
+	// after restart" even if ML happens to return the same content as the
+	// previous run.
+	var firstPublishDone bool
+	// prevPublished tracks the last successfully attempted-to-publish state
+	// for content comparison on subsequent pulls. We compare the actual
+	// payload fields, not the Version, so we don't republish on a version
+	// bump that re-uses the same content.
+	var prevPublished Snapshot
 
 	pull := func() {
 		if err := pullOnce(ctx, client, mlURL, st); err != nil {
@@ -164,6 +229,24 @@ func pollLoop(ctx context.Context, st *state, mlURL string, interval time.Durati
 		}
 		st.successes.Add(1)
 		st.lastSuccess.Store(time.Now().UnixNano())
+
+		if publisher == nil {
+			// Routing-hints fanout is disabled; nothing else to do.
+			return
+		}
+
+		// Always-publish on the first successful pull after process start;
+		// otherwise compare new vs. last-published content and skip if equal.
+		current := st.get()
+		shouldPublish := !firstPublishDone ||
+			!reflect.DeepEqual(prevPublished.Weights, current.Weights) ||
+			!reflect.DeepEqual(prevPublished.RateLimits, current.RateLimits)
+		if !shouldPublish {
+			return
+		}
+		publisher.PublishSnapshot(ctx, st, current)
+		prevPublished = current
+		firstPublishDone = true
 	}
 
 	pull() // immediate first pull
@@ -351,5 +434,127 @@ func handleMetrics(st *state) http.HandlerFunc {
 		// Use strconv for the float so we get a deterministic format without
 		// locale-dependent quirks.
 		fmt.Fprintf(w, "control_plane_age_seconds %s\n", strconv.FormatFloat(ageSec, 'f', 3, 64))
+
+		// Redis publishes per (service, result). We render success+error rows
+		// for every service that has a non-zero counter on either dimension —
+		// Prometheus tolerates absent series for new labels but giving both
+		// outcomes per service keeps alert rules simple (no NaN math).
+		st.pubMu.Lock()
+		services := make(map[string]struct{}, len(st.pubSuccess)+len(st.pubErrors))
+		for svc := range st.pubSuccess {
+			services[svc] = struct{}{}
+		}
+		for svc := range st.pubErrors {
+			services[svc] = struct{}{}
+		}
+		ordered := make([]string, 0, len(services))
+		for svc := range services {
+			ordered = append(ordered, svc)
+		}
+		sort.Strings(ordered) // deterministic ordering for scrapers/tests
+		successCopy := make(map[string]int64, len(st.pubSuccess))
+		errorCopy := make(map[string]int64, len(st.pubErrors))
+		for k, v := range st.pubSuccess {
+			successCopy[k] = v
+		}
+		for k, v := range st.pubErrors {
+			errorCopy[k] = v
+		}
+		st.pubMu.Unlock()
+
+		fmt.Fprintln(w, "# HELP control_plane_redis_publishes_total Total Redis pub/sub publish attempts partitioned by service and result.")
+		fmt.Fprintln(w, "# TYPE control_plane_redis_publishes_total counter")
+		for _, svc := range ordered {
+			fmt.Fprintf(w, "control_plane_redis_publishes_total{service=%q,result=\"success\"} %d\n", svc, successCopy[svc])
+			fmt.Fprintf(w, "control_plane_redis_publishes_total{service=%q,result=\"error\"} %d\n", svc, errorCopy[svc])
+		}
 	}
+}
+
+// redisPublisher fans out per-service RoutingHints to the
+// "routing:<service>" channels. It is a thin wrapper around go-redis with a
+// known-services list so a single snapshot turns into N publishes.
+type redisPublisher struct {
+	client *redis.Client
+}
+
+func newRedisPublisher(url string) (*redisPublisher, error) {
+	opts, err := parseRedisURL(url)
+	if err != nil {
+		return nil, fmt.Errorf("parse redis URL: %w", err)
+	}
+	// We deliberately skip an up-front Ping here: Redis may not be ready when
+	// control-plane boots, but go-redis will auto-reconnect on every Publish
+	// when the server comes back. This matches T7 acceptance scenario "при
+	// `docker start redis` через 30s — publish возобновляется на следующем
+	// pull-цикле" without bespoke retry logic.
+	client := redis.NewClient(opts)
+	return &redisPublisher{client: client}, nil
+}
+
+// PublishSnapshot publishes one RoutingHints per service mentioned in the
+// snapshot. Each publish failure is recorded as an error metric but does
+// not stop the loop — partial fan-out is preferred over all-or-nothing.
+func (p *redisPublisher) PublishSnapshot(ctx context.Context, st *state, snap Snapshot) {
+	// Union the keys from weights and rate_limits so a service mentioned in
+	// only one of them still gets a publish (defensive — ml-analyzer is
+	// expected to populate both, but T7 should not silently drop a service
+	// that's present in one map).
+	services := make(map[string]struct{}, len(snap.Weights)+len(snap.RateLimits))
+	for svc := range snap.Weights {
+		services[svc] = struct{}{}
+	}
+	for svc := range snap.RateLimits {
+		services[svc] = struct{}{}
+	}
+	for svc := range services {
+		hint := config.RoutingHints{
+			Service:    svc,
+			Version:    snap.Version,
+			UpdatedAt:  snap.UpdatedAt,
+			Weights:    snap.Weights[svc],
+			RateLimits: map[string]int{"rps": snap.RateLimits[svc].RPS},
+		}
+		body, err := json.Marshal(hint)
+		if err != nil {
+			st.recordPublish(svc, false)
+			slog.Warn("redis publish: marshal failed", slog.String("service", svc), slog.Any("err", err))
+			continue
+		}
+		pubCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err = p.client.Publish(pubCtx, "routing:"+svc, body).Err()
+		cancel()
+		if err != nil {
+			st.recordPublish(svc, false)
+			slog.Warn("redis publish failed", slog.String("service", svc), slog.Any("err", err))
+			continue
+		}
+		st.recordPublish(svc, true)
+		slog.Info("redis publish ok",
+			slog.String("service", svc),
+			slog.Int("version", hint.Version),
+		)
+	}
+}
+
+func (p *redisPublisher) Close() error {
+	if p == nil || p.client == nil {
+		return nil
+	}
+	return p.client.Close()
+}
+
+// parseRedisURL accepts both a full redis-go URL and a bare "host:port"
+// short form (e.g. "redis:6379") that docker-compose conventionally puts
+// in REDIS_URL. Mirrors sdk/config.parseRedisURL so this binary doesn't
+// have to import the SDK just for URL parsing — keeps the layering clean
+// (control-plane uses the redis client directly, SDK consumes hints).
+func parseRedisURL(s string) (*redis.Options, error) {
+	if s == "" {
+		return nil, fmt.Errorf("empty redis URL")
+	}
+	if strings.HasPrefix(s, "redis://") || strings.HasPrefix(s, "rediss://") {
+		return redis.ParseURL(s)
+	}
+	return redis.ParseURL("redis://" + s)
 }

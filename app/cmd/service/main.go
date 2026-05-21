@@ -15,6 +15,9 @@ import (
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/geo-distributed-gateway/sdk/config"
 	"github.com/geo-distributed-gateway/sdk/telemetry"
@@ -37,6 +40,20 @@ func main() {
 	// Telemetry events  → stdout (JSON Lines, consumed by Events Collector).
 	// Operational logs  → stderr (JSON, for log-aggregator / human consumption).
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
+	// OpenTelemetry tracer: exports spans to Jaeger via OTLP HTTP.
+	// Empty OTLP_ENDPOINT → no-op shutdown, service still runs (graceful skip).
+	shutdownTracer, err := telemetry.InitTracer(context.Background(), serviceName, zone, os.Getenv("OTLP_ENDPOINT"))
+	if err != nil {
+		slog.Warn("tracer init failed", slog.Any("err", err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracer(ctx); err != nil {
+			slog.Warn("tracer shutdown failed", slog.Any("err", err))
+		}
+	}()
 
 	// currentCfg holds the live ServiceConfig, updated by the watcher goroutine.
 	// Zone from env is the baseline; config file can override it and other fields.
@@ -98,6 +115,13 @@ func main() {
 		cabinetID := r.Header.Get("X-Cabinet-ID")
 		correlationID := r.Header.Get("X-Correlation-ID")
 
+		span := trace.SpanFromContext(r.Context())
+		span.SetAttributes(
+			attribute.String("user_id", userID),
+			attribute.String("cabinet_id", cabinetID),
+			attribute.String("zone", cfg.Zone),
+		)
+
 		slog.Info("GET /ping",
 			slog.String("instance", instance),
 			slog.String("zone", cfg.Zone),
@@ -133,7 +157,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: mux,
+		Handler: otelhttp.NewHandler(mux, serviceName),
 	}
 
 	go func() {
@@ -195,11 +219,45 @@ func main() {
 		}
 	}
 
+	// Routing-hints subscriber (T7): listens on Redis Pub/Sub channel
+	// "routing:<service>" for ML-derived weights/rate_limits. In v1 we just
+	// log received hints — actual application to routing lives in Envoy
+	// (Lua filter, T6). The subscriber is independent of the file-watcher
+	// (see DL-T7-001): different contracts, different channels, no merging.
+	var hintsSub *config.RoutingHintsSubscriber
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		s, err := config.NewRoutingHintsSubscriber(redisURL, serviceName)
+		if err != nil {
+			slog.Warn("routing hints subscriber failed to init; continuing without it",
+				slog.String("redis_url", redisURL), slog.Any("err", err))
+		} else {
+			hintsSub = s
+			go func() {
+				for hint := range hintsSub.Updates() {
+					slog.Info("routing hints received",
+						slog.String("service", hint.Service),
+						slog.Int("version", hint.Version),
+						slog.Any("weights", hint.Weights),
+						slog.Any("rate_limits", hint.RateLimits),
+					)
+					// v1: log only. Future self-throttling consumers can read
+					// from atomic.Value once we settle on a contract.
+				}
+			}()
+		}
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
 
 	slog.Info("Shutting down", slog.String("instance", instance))
+
+	if hintsSub != nil {
+		if err := hintsSub.Close(); err != nil {
+			slog.Warn("routing hints subscriber close", slog.Any("err", err))
+		}
+	}
 
 	if registered && consulClient != nil {
 		if err := consulClient.Agent().ServiceDeregister(instance); err != nil {
