@@ -35,17 +35,11 @@ func InitTracer(ctx context.Context, serviceName, zone, otlpEndpoint string) (fu
 		return noop, fmt.Errorf("otlp exporter: %w", err)
 	}
 
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(serviceName),
-			attribute.String("zone", zone),
-		),
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName(serviceName),
+		attribute.String("zone", zone),
 	)
-	if err != nil {
-		return noop, fmt.Errorf("resource merge: %w", err)
-	}
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
