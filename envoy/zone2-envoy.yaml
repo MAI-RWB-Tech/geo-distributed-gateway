@@ -87,7 +87,7 @@ static_resources:
       type: LOGICAL_DNS
       lb_policy: ROUND_ROBIN
       dns_resolvers:
-        - socket_address: { address: consul, port_value: 8600 }
+        - socket_address: { address: 172.30.2.5, port_value: 8600 }
       respect_dns_ttl: true
       dns_refresh_rate: 5s
       dns_lookup_family: V4_ONLY
@@ -117,7 +117,7 @@ static_resources:
       type: LOGICAL_DNS
       lb_policy: ROUND_ROBIN
       dns_resolvers:
-        - socket_address: { address: consul, port_value: 8600 }
+        - socket_address: { address: 172.30.2.5, port_value: 8600 }
       respect_dns_ttl: true
       dns_refresh_rate: 5s
       dns_lookup_family: V4_ONLY
@@ -147,7 +147,7 @@ static_resources:
       type: LOGICAL_DNS
       lb_policy: ROUND_ROBIN
       dns_resolvers:
-        - socket_address: { address: consul, port_value: 8600 }
+        - socket_address: { address: 172.30.2.5, port_value: 8600 }
       respect_dns_ttl: true
       dns_refresh_rate: 5s
       dns_lookup_family: V4_ONLY
@@ -177,7 +177,7 @@ static_resources:
       type: LOGICAL_DNS
       lb_policy: ROUND_ROBIN
       dns_resolvers:
-        - socket_address: { address: consul, port_value: 8600 }
+        - socket_address: { address: 172.30.2.5, port_value: 8600 }
       respect_dns_ttl: true
       dns_refresh_rate: 5s
       dns_lookup_family: V4_ONLY
@@ -207,7 +207,7 @@ static_resources:
       type: LOGICAL_DNS
       lb_policy: ROUND_ROBIN
       dns_resolvers:
-        - socket_address: { address: consul, port_value: 8600 }
+        - socket_address: { address: 172.30.2.5, port_value: 8600 }
       respect_dns_ttl: true
       dns_refresh_rate: 5s
       dns_lookup_family: V4_ONLY

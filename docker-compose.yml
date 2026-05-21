@@ -15,9 +15,12 @@ services:
       - "8600:8600/udp"   # DNS (UDP)
       - "8600:8600/tcp"   # DNS (TCP)
     networks:
-      - global-net
-      - zone1-net
-      - zone2-net
+      global-net:
+        ipv4_address: 172.30.0.5
+      zone1-net:
+        ipv4_address: 172.30.1.5
+      zone2-net:
+        ipv4_address: 172.30.2.5
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8500/v1/status/leader || exit 1"]
       interval: 5s
@@ -540,7 +543,16 @@ services:
 networks:
   global-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
   zone1-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.1.0/24
   zone2-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.2.0/24
