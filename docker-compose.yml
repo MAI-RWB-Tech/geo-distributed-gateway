@@ -402,7 +402,7 @@ services:
     ports:
       - "16686:16686"   # UI
       - "4318:4318"     # OTLP HTTP
-    networks: [global-net]
+    networks: [global-net, zone1-net, zone2-net]
 
   # Redis is used by T7 (cross-DC config feed via pub/sub).
   # No persistence — pub/sub messages are ephemeral by design.
