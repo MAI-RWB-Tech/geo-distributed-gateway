@@ -98,6 +98,14 @@ static_resources:
                               num_retries: 3
                               per_try_timeout: 2s
                 http_filters:
+                  # T6 score plugin: per-request Lua picks x-geo zone based on
+                  # Control Plane weights. MUST be before router so the x-geo
+                  # header it sets is visible to the route-matches above.
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        filename: /etc/envoy/lua/score.lua
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -180,6 +188,22 @@ static_resources:
                     socket_address:
                       address: zone2-envoy
                       port_value: 10000
+
+    # T6 score plugin: target for Lua httpCall to fetch per-service weights.
+    - name: control_plane_cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      dns_lookup_family: V4_ONLY
+      load_assignment:
+        cluster_name: control_plane_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: control-plane
+                      port_value: 9300
 
 admin:
   access_log_path: /tmp/admin_access.log
