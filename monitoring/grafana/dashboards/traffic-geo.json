@@ -378,12 +378,12 @@
           "legendFormat": "active ejections (geo_cluster)"
         },
         {
-          "expr": "sum(rate(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"envoy-zone1\",envoy_cluster_name=\"app_zone1_cluster\"}[1m]))",
+          "expr": "sum(rate(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"envoy-zone1\",envoy_cluster_name=~\"service-[a-e]-zone1-cluster\"}[1m]))",
           "refId": "B",
           "legendFormat": "enforced/s (zone1)"
         },
         {
-          "expr": "sum(rate(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"envoy-zone2\",envoy_cluster_name=\"app_zone2_cluster\"}[1m]))",
+          "expr": "sum(rate(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"envoy-zone2\",envoy_cluster_name=~\"service-[a-e]-zone2-cluster\"}[1m]))",
           "refId": "C",
           "legendFormat": "enforced/s (zone2)"
         }

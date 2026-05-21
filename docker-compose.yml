@@ -1,20 +1,55 @@
 services:
 
-  # ── Zone 1 ──────────────────────────────────────────────────────────────────
+  # ── Service discovery ────────────────────────────────────────────────────────
+  # Single Consul agent in dev mode (single DC "dc1"). Attached to all three
+  # networks so app containers in zoneN-net can register, and zone-envoy in
+  # zoneN-net + global-net can resolve via Consul DNS on :8600.
+  # See CLAUDE.md → "Service discovery" and ADR §5.
 
-  app-zone1-1:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    container_name: app-zone1-1
+  consul:
+    image: hashicorp/consul:1.18
+    container_name: consul
+    command: agent -dev -client=0.0.0.0 -ui
+    ports:
+      - "8500:8500"       # HTTP API + UI
+      - "8600:8600/udp"   # DNS (UDP)
+      - "8600:8600/tcp"   # DNS (TCP)
+    networks:
+      - global-net
+      - zone1-net
+      - zone2-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8500/v1/status/leader || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
+
+  # ── Zone 1 apps (5 services × 1 instance each) ──────────────────────────────
+  # Container, service-name, zone all follow CLAUDE.md "Naming conventions".
+  # Labels enable label-based filtering by events-collector (T2).
+  # OTLP_ENDPOINT and REDIS_URL are no-ops until T5/T7 wire them in.
+
+  service-a-zone1-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-a-zone1-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-a"
+      - "gateway.zone=zone1"
     environment:
-      - INSTANCE_NAME=zone1-1
+      - SERVICE_NAME=service-a
+      - INSTANCE_NAME=service-a-zone1-1
       - ZONE=zone1
+      - CONSUL_ADDR=consul:8500
       - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
     volumes:
       - ./app/config/service.json:/etc/service/config.json:ro
-    networks:
-      - zone1-net
+    networks: [zone1-net]
+    depends_on:
+      consul: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 5s
@@ -22,19 +57,107 @@ services:
       retries: 3
       start_period: 5s
 
-  app-zone1-2:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    container_name: app-zone1-2
+  service-b-zone1-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-b-zone1-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-b"
+      - "gateway.zone=zone1"
     environment:
-      - INSTANCE_NAME=zone1-2
+      - SERVICE_NAME=service-b
+      - INSTANCE_NAME=service-b-zone1-1
       - ZONE=zone1
+      - CONSUL_ADDR=consul:8500
       - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
     volumes:
       - ./app/config/service.json:/etc/service/config.json:ro
-    networks:
-      - zone1-net
+    networks: [zone1-net]
+    depends_on:
+      consul: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  service-c-zone1-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-c-zone1-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-c"
+      - "gateway.zone=zone1"
+    environment:
+      - SERVICE_NAME=service-c
+      - INSTANCE_NAME=service-c-zone1-1
+      - ZONE=zone1
+      - CONSUL_ADDR=consul:8500
+      - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
+    networks: [zone1-net]
+    depends_on:
+      consul: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  service-d-zone1-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-d-zone1-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-d"
+      - "gateway.zone=zone1"
+    environment:
+      - SERVICE_NAME=service-d
+      - INSTANCE_NAME=service-d-zone1-1
+      - ZONE=zone1
+      - CONSUL_ADDR=consul:8500
+      - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
+    networks: [zone1-net]
+    depends_on:
+      consul: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  service-e-zone1-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-e-zone1-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-e"
+      - "gateway.zone=zone1"
+    environment:
+      - SERVICE_NAME=service-e
+      - INSTANCE_NAME=service-e-zone1-1
+      - ZONE=zone1
+      - CONSUL_ADDR=consul:8500
+      - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
+    networks: [zone1-net]
+    depends_on:
+      consul: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 5s
@@ -57,10 +180,12 @@ services:
       # Admin API exposed only for Prometheus scraping (observability NFR).
       - "19001:9901"
     depends_on:
-      app-zone1-1:
-        condition: service_healthy
-      app-zone1-2:
-        condition: service_healthy
+      service-a-zone1-1: { condition: service_healthy }
+      service-b-zone1-1: { condition: service_healthy }
+      service-c-zone1-1: { condition: service_healthy }
+      service-d-zone1-1: { condition: service_healthy }
+      service-e-zone1-1: { condition: service_healthy }
+      consul:            { condition: service_healthy }
     networks:
       - global-net
       - zone1-net
@@ -71,21 +196,28 @@ services:
       retries: 3
       start_period: 5s
 
-  # ── Zone 2 ──────────────────────────────────────────────────────────────────
+  # ── Zone 2 apps (5 services × 1 instance each) ──────────────────────────────
 
-  app-zone2-1:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    container_name: app-zone2-1
+  service-a-zone2-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-a-zone2-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-a"
+      - "gateway.zone=zone2"
     environment:
-      - INSTANCE_NAME=zone2-1
+      - SERVICE_NAME=service-a
+      - INSTANCE_NAME=service-a-zone2-1
       - ZONE=zone2
+      - CONSUL_ADDR=consul:8500
       - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
     volumes:
       - ./app/config/service.json:/etc/service/config.json:ro
-    networks:
-      - zone2-net
+    networks: [zone2-net]
+    depends_on:
+      consul: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 5s
@@ -93,19 +225,107 @@ services:
       retries: 3
       start_period: 5s
 
-  app-zone2-2:
-    build:
-      context: .
-      dockerfile: app/Dockerfile
-    container_name: app-zone2-2
+  service-b-zone2-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-b-zone2-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-b"
+      - "gateway.zone=zone2"
     environment:
-      - INSTANCE_NAME=zone2-2
+      - SERVICE_NAME=service-b
+      - INSTANCE_NAME=service-b-zone2-1
       - ZONE=zone2
+      - CONSUL_ADDR=consul:8500
       - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
     volumes:
       - ./app/config/service.json:/etc/service/config.json:ro
-    networks:
-      - zone2-net
+    networks: [zone2-net]
+    depends_on:
+      consul: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  service-c-zone2-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-c-zone2-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-c"
+      - "gateway.zone=zone2"
+    environment:
+      - SERVICE_NAME=service-c
+      - INSTANCE_NAME=service-c-zone2-1
+      - ZONE=zone2
+      - CONSUL_ADDR=consul:8500
+      - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
+    networks: [zone2-net]
+    depends_on:
+      consul: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  service-d-zone2-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-d-zone2-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-d"
+      - "gateway.zone=zone2"
+    environment:
+      - SERVICE_NAME=service-d
+      - INSTANCE_NAME=service-d-zone2-1
+      - ZONE=zone2
+      - CONSUL_ADDR=consul:8500
+      - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
+    networks: [zone2-net]
+    depends_on:
+      consul: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
+
+  service-e-zone2-1:
+    build: { context: ., dockerfile: app/Dockerfile }
+    container_name: service-e-zone2-1
+    labels:
+      - "gateway.component=app"
+      - "gateway.service.name=service-e"
+      - "gateway.zone=zone2"
+    environment:
+      - SERVICE_NAME=service-e
+      - INSTANCE_NAME=service-e-zone2-1
+      - ZONE=zone2
+      - CONSUL_ADDR=consul:8500
+      - CONFIG_FILE=/etc/service/config.json
+      - OTLP_ENDPOINT=jaeger:4318
+      - REDIS_URL=redis:6379
+    volumes:
+      - ./app/config/service.json:/etc/service/config.json:ro
+    networks: [zone2-net]
+    depends_on:
+      consul: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 5s
@@ -124,10 +344,12 @@ services:
       # FR-01: data-plane (10000) NOT exposed externally — all traffic must enter via global-envoy.
       - "19002:9901"
     depends_on:
-      app-zone2-1:
-        condition: service_healthy
-      app-zone2-2:
-        condition: service_healthy
+      service-a-zone2-1: { condition: service_healthy }
+      service-b-zone2-1: { condition: service_healthy }
+      service-c-zone2-1: { condition: service_healthy }
+      service-d-zone2-1: { condition: service_healthy }
+      service-e-zone2-1: { condition: service_healthy }
+      consul:            { condition: service_healthy }
     networks:
       - global-net
       - zone2-net
@@ -147,6 +369,7 @@ services:
       - ENVOY_UID=0
     volumes:
       - ./envoy/global-envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./envoy/lua:/etc/envoy/lua:ro   # populated by T6 (Lua score plugin)
     ports:
       - "10000:10000"   # main gateway (FR-01: единая точка входа)
       - "19000:9901"    # admin API for Prometheus
@@ -163,6 +386,69 @@ services:
       timeout: 2s
       retries: 3
       start_period: 5s
+
+  # ── Tracing & shared backends ────────────────────────────────────────────────
+  # Jaeger uses the official all-in-one image — no Dockerfile needed.
+  # Wired up to actual OTLP exporters in T5.
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # UI
+      - "4318:4318"     # OTLP HTTP
+    networks: [global-net]
+
+  # Redis is used by T7 (cross-DC config feed via pub/sub).
+  # No persistence — pub/sub messages are ephemeral by design.
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --save "" --appendonly no
+    ports: ["6379:6379"]
+    networks: [global-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  # ── Group B service stubs (real images land in T2/T3/T4) ─────────────────────
+  # All three start as "sleep infinity" containers so the compose stack is
+  # complete and ports are reserved. They are NOT healthchecked here — task
+  # owners add proper healthchecks together with the real code.
+
+  events-collector:
+    build: { context: ., dockerfile: cmd/events-collector/Dockerfile }
+    container_name: events-collector
+    ports: ["9100:9100"]
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks: [global-net]
+
+  ml-analyzer:
+    build: { context: ., dockerfile: cmd/ml-analyzer/Dockerfile }
+    container_name: ml-analyzer
+    ports: ["9200:9200"]
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+    networks: [global-net]
+    depends_on:
+      prometheus: { condition: service_started }
+
+  control-plane:
+    build: { context: ., dockerfile: cmd/control-plane/Dockerfile }
+    container_name: control-plane
+    ports: ["9300:9300"]
+    environment:
+      - ML_URL=http://ml-analyzer:9200
+      - REDIS_URL=redis:6379
+    networks: [global-net]
+    depends_on:
+      ml-analyzer: { condition: service_started }
+      redis:       { condition: service_healthy }
 
   # ── Monitoring stack ─────────────────────────────────────────────────────────
 

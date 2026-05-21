@@ -19,6 +19,7 @@ static_resources:
                       domains: ["*"]
                       routes:
                         # Zone pinning via x-geo header — bypass LB, go directly.
+                        # Kept for T6 (Lua score plugin uses these clusters).
                         - match:
                             headers:
                               - name: x-geo
@@ -33,10 +34,60 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: zone2_envoy
-                        # Default: locality-aware load balancing across both DCs.
-                        # Normal state  → equal weight 50/50 (locality_weighted_lb_config).
-                        # One DC down   → outlier detection ejects its endpoint;
-                        #                 retry and new requests go to the surviving DC.
+                        # Path-based routing to the geo cluster: zone-envoy
+                        # picks the right per-service upstream by path prefix.
+                        - match: { prefix: "/service-a/" }
+                          route:
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-b/" }
+                          route:
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-c/" }
+                          route:
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-d/" }
+                          route:
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-e/" }
+                          route:
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
+                        # Backward-compat: bare /ping → geo_cluster
+                        # (zone-envoy routes it to service-a). Keeps existing
+                        # `make traffic-gen` working without flags.
+                        - match: { prefix: "/ping" }
+                          route:
+                            cluster: geo_cluster
+                            retry_policy:
+                              retry_on: "5xx,connect-failure,reset,retriable-status-codes"
+                              retriable_status_codes: [503]
+                              num_retries: 3
+                              per_try_timeout: 2s
+                        # Default fallback for unknown paths.
                         - match:
                             prefix: "/"
                           route:

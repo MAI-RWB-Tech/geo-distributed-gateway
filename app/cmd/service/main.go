@@ -13,11 +13,17 @@ import (
 	"syscall"
 	"time"
 
+	consulapi "github.com/hashicorp/consul/api"
+
 	"github.com/geo-distributed-gateway/sdk/config"
 	"github.com/geo-distributed-gateway/sdk/telemetry"
 )
 
 func main() {
+	serviceName := os.Getenv("SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "service-a"
+	}
 	instance := os.Getenv("INSTANCE_NAME")
 	if instance == "" {
 		instance = "unknown"
@@ -75,7 +81,7 @@ func main() {
 		}
 	}
 
-	col := telemetry.New("stub-service", instance, zone, nil)
+	col := telemetry.New(serviceName, instance, zone, nil)
 	col.Start()
 	defer col.Stop()
 
@@ -113,6 +119,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":   "ok",
+			"service":  serviceName,
 			"instance": instance,
 			"zone":     cfg.Zone,
 			"config": map[string]any{
@@ -129,18 +136,74 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("Starting stub service", slog.String("addr", srv.Addr), slog.String("instance", instance))
+		slog.Info("Starting stub service",
+			slog.String("addr", srv.Addr),
+			slog.String("service", serviceName),
+			slog.String("instance", instance),
+		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server error", slog.Any("err", err))
 			os.Exit(1)
 		}
 	}()
 
+	// Consul self-registration. Skipped (with a warning) if CONSUL_ADDR is empty
+	// or the agent is unreachable — the HTTP server stays up so unit-style /ping
+	// probes still work without a discovery backend.
+	var (
+		consulClient *consulapi.Client
+		registered   bool
+	)
+	if consulAddr := os.Getenv("CONSUL_ADDR"); consulAddr != "" {
+		cfg := consulapi.DefaultConfig()
+		cfg.Address = consulAddr
+		client, err := consulapi.NewClient(cfg)
+		if err != nil {
+			slog.Warn("consul: client init failed; running without registration",
+				slog.String("addr", consulAddr), slog.Any("err", err))
+		} else {
+			reg := &consulapi.AgentServiceRegistration{
+				ID:      instance,             // e.g. "service-a-zone1-1"
+				Name:    serviceName,          // e.g. "service-a"
+				Tags:    []string{zone},       // exactly one of "zone1" / "zone2"
+				Address: instance,             // Docker DNS resolves container_name → IP
+				Port:    8080,
+				Check: &consulapi.AgentServiceCheck{
+					HTTP:                           "http://" + instance + ":8080/health",
+					Interval:                       "5s",
+					Timeout:                        "2s",
+					DeregisterCriticalServiceAfter: "30s",
+				},
+			}
+			if err := client.Agent().ServiceRegister(reg); err != nil {
+				slog.Warn("consul: registration failed; running without it",
+					slog.String("addr", consulAddr), slog.Any("err", err))
+			} else {
+				registered = true
+				consulClient = client
+				slog.Info("consul: registered",
+					slog.String("service", serviceName),
+					slog.String("instance", instance),
+					slog.String("zone", zone),
+				)
+			}
+		}
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
 
 	slog.Info("Shutting down", slog.String("instance", instance))
+
+	if registered && consulClient != nil {
+		if err := consulClient.Agent().ServiceDeregister(instance); err != nil {
+			slog.Warn("consul: deregister failed", slog.String("instance", instance), slog.Any("err", err))
+		} else {
+			slog.Info("consul: deregistered", slog.String("instance", instance))
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
