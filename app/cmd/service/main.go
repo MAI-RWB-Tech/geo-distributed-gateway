@@ -15,6 +15,9 @@ import (
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/geo-distributed-gateway/sdk/config"
 	"github.com/geo-distributed-gateway/sdk/telemetry"
@@ -37,6 +40,20 @@ func main() {
 	// Telemetry events  → stdout (JSON Lines, consumed by Events Collector).
 	// Operational logs  → stderr (JSON, for log-aggregator / human consumption).
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+
+	// OpenTelemetry tracer: exports spans to Jaeger via OTLP HTTP.
+	// Empty OTLP_ENDPOINT → no-op shutdown, service still runs (graceful skip).
+	shutdownTracer, err := telemetry.InitTracer(context.Background(), serviceName, zone, os.Getenv("OTLP_ENDPOINT"))
+	if err != nil {
+		slog.Warn("tracer init failed", slog.Any("err", err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracer(ctx); err != nil {
+			slog.Warn("tracer shutdown failed", slog.Any("err", err))
+		}
+	}()
 
 	// currentCfg holds the live ServiceConfig, updated by the watcher goroutine.
 	// Zone from env is the baseline; config file can override it and other fields.
@@ -98,6 +115,13 @@ func main() {
 		cabinetID := r.Header.Get("X-Cabinet-ID")
 		correlationID := r.Header.Get("X-Correlation-ID")
 
+		span := trace.SpanFromContext(r.Context())
+		span.SetAttributes(
+			attribute.String("user_id", userID),
+			attribute.String("cabinet_id", cabinetID),
+			attribute.String("zone", cfg.Zone),
+		)
+
 		slog.Info("GET /ping",
 			slog.String("instance", instance),
 			slog.String("zone", cfg.Zone),
@@ -133,7 +157,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: mux,
+		Handler: otelhttp.NewHandler(mux, serviceName),
 	}
 
 	go func() {
