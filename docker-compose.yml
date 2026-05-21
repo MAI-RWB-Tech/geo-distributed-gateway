@@ -411,7 +411,7 @@ services:
     container_name: redis
     command: redis-server --save "" --appendonly no
     ports: ["6379:6379"]
-    networks: [global-net]
+    networks: [global-net, zone1-net, zone2-net]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
