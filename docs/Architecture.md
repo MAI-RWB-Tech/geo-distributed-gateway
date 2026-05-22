@@ -166,22 +166,22 @@ sequenceDiagram
     participant C as Клиент
     participant GE as global-envoy
     participant CP as control-plane
-    participant ZE as zone{1,2}-envoy
-    participant CON as consul (DNS)
+    participant ZE as zone-envoy
+    participant CON as consul DNS
     participant APP as service-X-zoneN-1
     participant J as jaeger
 
-    C->>GE: GET /service-a/ping<br/>(W3C traceparent если инструментирован)
-    Note over GE: Lua-фильтр on_request:<br/>cache hit? используем закешированные веса<br/>cache miss? httpCall в control-plane
-    GE-->>CP: GET /config/weights/service-a<br/>(только на cache miss, TTL 30s)
+    C->>GE: GET /service-a/ping (W3C traceparent если инструментирован)
+    Note over GE: Lua on_request — cache hit берём кэш<br/>cache miss идём в control-plane
+    GE-->>CP: GET /config/weights/service-a (только на cache miss, TTL 30s)
     CP-->>GE: {"zone1":0.6,"zone2":0.4}
-    Note over GE: weighted random ->; добавляем x-geo: zone1
+    Note over GE: weighted random выбор зоны<br/>добавляем header x-geo=zone1
     GE->>ZE: forward с x-geo + traceparent
-    Note over ZE: маршрутизация по префиксу /service-a/;<br/>prefix_rewrite "/";<br/>cluster service-a-zoneN-cluster
-    ZE->>CON: A-lookup zoneN.service-a.service.consul (DNS:8600)
+    Note over ZE: route по префиксу /service-a/<br/>prefix_rewrite "/"<br/>cluster service-a-zoneN-cluster
+    ZE->>CON: A-lookup zoneN.service-a.service.consul на порту 8600
     CON-->>ZE: IP контейнера service-a-zoneN-1
     ZE->>APP: GET /ping
-    Note over APP: otelhttp создаёт server span;<br/>handler добавляет user_id, cabinet_id, zone;<br/>пишет JSON-телеметрию в stdout
+    Note over APP: otelhttp создаёт server span<br/>handler добавляет user_id, cabinet_id, zone<br/>пишет JSON-телеметрию в stdout
     APP-->>ZE: 200 + X-Served-By
     ZE-->>GE: 200
     GE-->>C: 200 + X-Served-By
@@ -209,31 +209,31 @@ sequenceDiagram
     participant ML as ml-analyzer
     participant CP as control-plane
     participant R as Redis
-    participant LUA as global-envoy (Lua)
-    participant APP as service-*
+    participant LUA as global-envoy Lua
+    participant APP as service-X
 
     loop scrape
         P->>E: scrape envoy_cluster_* метрик
     end
 
-    loop каждые -interval (60s)
-        ML->>P: PromQL: p99, rps, error_rate per cluster
+    loop каждые interval (60s)
+        ML->>P: PromQL запросы p99, rps, error_rate per cluster
         P-->>ML: time-series
-        Note over ML: score = 1/(1+p99_ms/100) * (1-error_rate)<br/>нормализуем sum=1.0 per service<br/>rate_limit = max(zone_rps) * 1.5
+        Note over ML: score = 1/(1 + p99_ms/100) * (1 - error_rate)<br/>нормализуем sum=1.0 per service<br/>rate_limit = max(zone_rps) * 1.5
         ML->>ML: кешируем Recommendations в памяти
     end
 
     loop каждые poll-interval (30s)
         CP->>ML: GET /recommendations
         ML-->>CP: {weights, rate_limits}
-        Note over CP: DeepEqual c прошлым?<br/>отличается -> bump version, publish
-        CP->>R: PUBLISH routing:service-a {...}
-        CP->>R: PUBLISH routing:service-b {...}
-        Note over CP: ...по одному publish на сервис на каждое изменение
+        Note over CP: DeepEqual с прошлым<br/>отличается bump version и publish<br/>совпадает skip
+        CP->>R: PUBLISH в routing service-a payload
+        CP->>R: PUBLISH в routing service-b payload
+        Note over CP: по одному publish на сервис на каждое изменение
     end
 
     R-->>APP: subscriber получает RoutingHints
-    Note over APP: v1: только лог
+    Note over APP: v1 только лог
 
     loop на каждый request (cache miss, TTL 30s per worker)
         LUA->>CP: GET /config/weights/service-X
@@ -269,14 +269,14 @@ sequenceDiagram
     GE->>ZE1: forward (Lua выбрал zone1)
     ZE1->>S1: GET /ping
     S1--xZE1: connect_failure (контейнер остановлен failure-runner-ом)
-    Note over ZE1: outlier_detection: эжектит S1 endpoint;<br/>в cluster больше нет endpoint-ов
+    Note over ZE1: outlier_detection эжектит S1 endpoint<br/>в cluster больше нет endpoint-ов
     ZE1--xGE: 503 no_healthy_upstream
-    Note over GE: retry_policy: connect-failure,refused-stream,gateway-error,reset<br/>retries -> 2;<br/>geo_cluster имеет zone1_envoy И zone2_envoy как endpoints
+    Note over GE: retry_policy ловит connect-failure / refused-stream / gateway-error / reset<br/>num_retries = 2<br/>geo_cluster имеет zone1_envoy И zone2_envoy как endpoints
     GE->>ZE2: retry на zone2_envoy endpoint
     ZE2->>S2: GET /ping
     S2-->>ZE2: 200
     ZE2-->>GE: 200
-    GE-->>C: 200 + X-Served-By: service-X-zone2-1
+    GE-->>C: 200 + X-Served-By service-X-zone2-1
 ```
 
 Работает за счёт связки трёх вещей:
@@ -295,17 +295,17 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SVC as service-X-zoneN-1 (Go-бинарь)
+    participant SVC as service-X-zoneN-1
     participant C as Consul agent
 
-    Note over SVC: старт: читаем SERVICE_NAME, ZONE, CONSUL_ADDR env;<br/>определяем свой IP через net.InterfaceAddrs()
-    SVC->>C: agent.ServiceRegister(name=service-X, id=service-X-zoneN-1,<br/>tags=[zoneN], address=<own_ip>, port=8080,<br/>check=HTTP /health каждые 5s)
+    Note over SVC: на старте читаем env SERVICE_NAME, ZONE, CONSUL_ADDR<br/>определяем свой IP через net.InterfaceAddrs()
+    SVC->>C: agent.ServiceRegister(name=service-X, id=service-X-zoneN-1,<br/>tags=[zoneN], address=own IP, port=8080,<br/>check=HTTP /health каждые 5s)
     C-->>SVC: ok
-    Note over SVC: serve HTTP /ping, /health
-    Note over SVC: SIGTERM
+    Note over SVC: serve HTTP /ping и /health
+    Note over SVC: получен SIGTERM
     SVC->>C: agent.ServiceDeregister(service-X-zoneN-1)
     C-->>SVC: ok
-    Note over SVC: srv.Shutdown(15s timeout)
+    Note over SVC: srv.Shutdown с таймаутом 15s
 ```
 
 Best-effort: любая ошибка (Consul недоступен, ошибка регистрации) логируется,
