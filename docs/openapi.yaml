@@ -1,0 +1,324 @@
+openapi: 3.0.3
+info:
+  title: Geo-Distributed Gateway API
+  version: 1.0.0
+  description: |
+    HTTP APIs of all custom services in the gateway stack.
+
+    External components with their own well-known APIs (Consul, Jaeger,
+    Prometheus, Grafana, Alertmanager, Redis) are not documented here —
+    refer to their upstream documentation.
+  license:
+    name: Internal
+
+servers:
+  - url: http://localhost:10000
+    description: Global Envoy (public entry point)
+  - url: http://localhost:9300
+    description: Control Plane
+  - url: http://localhost:9200
+    description: ML Analyzer
+  - url: http://localhost:9100
+    description: Events Collector
+
+tags:
+  - name: gateway
+    description: Public traffic entry — global-envoy on :10000
+  - name: control-plane
+    description: Control Plane — owns adaptive routing snapshot (:9300)
+  - name: ml-analyzer
+    description: ML Analyzer — offline weight/limit recommendations (:9200)
+  - name: events-collector
+    description: Events Collector — Prometheus metrics from app stdout (:9100)
+
+paths:
+  # ── Gateway (public, via global-envoy) ─────────────────────────────────────
+
+  /service-{name}/ping:
+    get:
+      tags: [gateway]
+      summary: Probe a logical service through the gateway
+      description: |
+        Routes through global-envoy → score Lua filter (sets `x-geo`) →
+        zone-envoy (`prefix_rewrite: "/"`) → stub service `/ping`.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Logical service name (a..e)
+          schema:
+            type: string
+            enum: [a, b, c, d, e]
+            example: a
+        - name: X-User-ID
+          in: header
+          required: false
+          schema: { type: string }
+        - name: X-Cabinet-ID
+          in: header
+          required: false
+          schema: { type: string }
+        - name: X-Correlation-ID
+          in: header
+          required: false
+          schema: { type: string }
+        - name: x-geo
+          in: header
+          required: false
+          description: Force zone pinning (bypasses Lua weighted choice)
+          schema:
+            type: string
+            enum: [zone1, zone2]
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Served-By:
+              description: Container name that handled the request
+              schema: { type: string, example: service-a-zone1-1 }
+            X-Zone:
+              description: Zone of the upstream
+              schema: { type: string, enum: [zone1, zone2] }
+            X-Route-Fallback:
+              description: |
+                NOT EMITTED in current build. Plan T6 acceptance expected this
+                sentinel header on Control Plane failure; trampoline through
+                dynamicMetadata is broken in Envoy 1.36 Lua bindings (see
+                DL-T6-001). Fallback is observable via `docker logs
+                global-envoy | grep "score:.*fallback"` instead.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+        '503':
+          description: All upstream zones unhealthy
+
+  /ping:
+    get:
+      tags: [gateway]
+      summary: Backward-compatible probe (defaults to service-a)
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Served-By:
+              schema: { type: string, example: service-a-zone1-1 }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+
+  # ── Control Plane ──────────────────────────────────────────────────────────
+
+  /config:
+    get:
+      tags: [control-plane]
+      servers:
+        - url: http://localhost:9300
+      summary: Full routing snapshot
+      description: |
+        In-memory snapshot updated each poll from ML Analyzer. On graceful
+        degradation (ML unavailable) returns last-known-good. Initial state
+        before first successful pull is `version=0, updated_at=zero, weights={}, rate_limits={}`.
+      responses:
+        '200':
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+
+  /config/weights/{service}:
+    get:
+      tags: [control-plane]
+      servers:
+        - url: http://localhost:9300
+      summary: Flat per-service zone weights (consumed by Lua filter)
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+            example: service-a
+      responses:
+        '200':
+          description: Flat weights
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlatWeights'
+        '404':
+          description: Unknown service OR weights map empty (no pull yet)
+
+  /healthz:
+    get:
+      tags: [control-plane, ml-analyzer, events-collector]
+      summary: Liveness/freshness probe (semantics per service)
+      description: |
+        - Control Plane: 200 if `version > 0` AND `now - lastSuccess ≤ 2.5 × poll_interval`; 503 otherwise.
+        - ML Analyzer: 200 if at least one successful Prometheus poll within `3 × interval`; 503 otherwise.
+        - Events Collector: 200 (no upstream dependencies).
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  last_pull: { type: string, format: date-time }
+                  last_success: { type: string, format: date-time }
+        '503':
+          description: Unhealthy / stale
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string, example: ml unreachable }
+                  last_pull: { type: string, format: date-time }
+                  last_success: { type: string, format: date-time }
+
+  /metrics:
+    get:
+      tags: [control-plane, ml-analyzer, events-collector]
+      summary: Prometheus text exposition
+      description: |
+        Standard Prometheus 0.0.4 text format. Custom metrics per service:
+
+        **Control Plane (:9300)**:
+        - `control_plane_config_version` (gauge)
+        - `control_plane_ml_pulls_total{result}` (counter)
+        - `control_plane_age_seconds` (gauge)
+        - `control_plane_redis_publishes_total{service,result}` (counter, T7)
+
+        **ML Analyzer (:9200)**:
+        - `ml_recommendations_generated_total` (counter)
+        - `ml_last_recommendation_timestamp_seconds` (gauge)
+        - `ml_prometheus_query_errors_total{query}` (counter)
+
+        **Events Collector (:9100)**:
+        - `events_total{service,zone,kind}` (counter; kind ∈ start/stop/request/error)
+        - `requests_total{service,zone,status_class}` (counter; status_class = 2xx/3xx/4xx/5xx)
+        - `errors_total{service,zone}` (counter)
+        - `request_latency_ms{service,zone}` (histogram)
+
+        NOTE: `user_id` / `cabinet_id` are intentionally NOT exposed as labels
+        (cardinality control); they go to Jaeger span attributes instead.
+      responses:
+        '200':
+          description: Metrics
+          content:
+            text/plain:
+              schema: { type: string }
+
+  # ── ML Analyzer ────────────────────────────────────────────────────────────
+
+  /recommendations:
+    get:
+      tags: [ml-analyzer]
+      servers:
+        - url: http://localhost:9200
+      summary: Current ML recommendations (weights + rate limits per service)
+      description: |
+        Refreshed every `-interval` (default 60s) from PromQL queries against
+        `envoy_cluster_*` metrics. On Prometheus failure returns last-known-good.
+
+        Invariants per service: `|weights[svc].zone1 + weights[svc].zone2 - 1.0| ≤ 0.01`; `rate_limits[svc].rps > 0`.
+      responses:
+        '200':
+          description: Recommendations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recommendations'
+        '503':
+          description: No successful Prometheus poll yet (first `-interval` after start)
+
+components:
+  schemas:
+    PingResponse:
+      type: object
+      properties:
+        service: { type: string, example: service-a }
+        instance: { type: string, example: service-a-zone1-1 }
+        zone: { type: string, enum: [zone1, zone2] }
+        user_id: { type: string }
+        cabinet_id: { type: string }
+        correlation_id: { type: string }
+
+    Snapshot:
+      type: object
+      required: [version, updated_at, weights, rate_limits]
+      properties:
+        version:
+          type: integer
+          description: Monotonic on content change. 0 = no successful pull yet.
+          example: 1
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-05-22T07:08:31.144070626Z"
+        weights:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/FlatWeights'
+          example:
+            service-a: { zone1: 0.5, zone2: 0.5 }
+            service-b: { zone1: 0.55, zone2: 0.45 }
+        rate_limits:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/RateLimit'
+          example:
+            service-a: { rps: 750 }
+
+    Recommendations:
+      type: object
+      required: [updated_at, weights, rate_limits]
+      description: Same shape as Snapshot but without the `version` field.
+      properties:
+        updated_at: { type: string, format: date-time }
+        weights:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/FlatWeights'
+        rate_limits:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/RateLimit'
+
+    FlatWeights:
+      type: object
+      required: [zone1, zone2]
+      properties:
+        zone1: { type: number, format: float, minimum: 0, maximum: 1 }
+        zone2: { type: number, format: float, minimum: 0, maximum: 1 }
+
+    RateLimit:
+      type: object
+      required: [rps]
+      properties:
+        rps:
+          type: integer
+          minimum: 1
+
+    RoutingHints:
+      type: object
+      description: |
+        Payload published by Control Plane to Redis channel `routing:<service>`
+        (T7). Consumer: `sdk/config.RoutingHintsSubscriber` in app services.
+      required: [service, version, updated_at, weights, rate_limits]
+      properties:
+        service: { type: string, example: service-a }
+        version: { type: integer, example: 1 }
+        updated_at: { type: string, format: date-time }
+        weights:
+          $ref: '#/components/schemas/FlatWeights'
+        rate_limits:
+          type: object
+          properties:
+            rps: { type: integer, example: 100 }
