@@ -77,4 +77,6 @@ docs/                 ADR, Requirements, Runbook, OpenAPI
 
 ## Architecture
 
-See [`docs/ADR.md`](docs/ADR.md) for design rationale and [`docs/Runbook.md`](docs/Runbook.md) for operational procedures.
+[`docs/Architecture.md`](docs/Architecture.md) — top-down overview (system context, container diagram, request/failover/ML flows, component internals). Designed for cold reading.
+
+Supporting docs: [`docs/ADR.md`](docs/ADR.md) (rationale), [`docs/Runbook.md`](docs/Runbook.md) (ops), [`docs/Requirements.md`](docs/Requirements.md) (FR/NFR).
