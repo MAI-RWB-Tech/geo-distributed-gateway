@@ -1,52 +1,52 @@
-# Architecture
+# Архитектура
 
-This document describes the geo-distributed-gateway from the top down: what the
-system is, what its containers are, how data flows through it, and what state
-lives where. It is meant to be readable end-to-end by someone who has never
-touched the codebase.
+Документ описывает geo-distributed-gateway сверху вниз: что это за система,
+какие у неё контейнеры, как через неё проходят данные и где какое состояние
+живёт. Рассчитан на чтение целиком человеком, который никогда не открывал
+этот репозиторий.
 
-Cross-references:
+Связанные документы:
 
-- HTTP wire contracts — [`openapi.yaml`](openapi.yaml)
-- Design rationale — [`ADR.md`](ADR.md)
-- Functional / non-functional requirements — [`Requirements.md`](Requirements.md)
-- Operational procedures — [`Runbook.md`](Runbook.md)
+- HTTP wire-контракты — [`openapi.yaml`](openapi.yaml)
+- Обоснования архитектурных решений — [`ADR.md`](ADR.md)
+- Функциональные и нефункциональные требования — [`Requirements.md`](Requirements.md)
+- Операционные процедуры — [`Runbook.md`](Runbook.md)
 
-## 1. What this is
+## 1. Что это
 
-A two-datacenter HTTP gateway that exposes a fleet of stub backends over a
-single public endpoint and adapts cross-zone load balancing based on
-observed latency / error rates.
+HTTP-шлюз на два дата-центра, который выставляет наружу набор stub-бэкендов
+через одну публичную точку входа и адаптивно балансирует кросс-зональную
+нагрузку на основе наблюдаемой latency / error rate.
 
-| Aspect | Value |
+| Параметр | Значение |
 |---|---|
-| Topology | 2 datacenters (`zone1`, `zone2`), 5 logical services × 2 zones = 10 backend instances |
-| Public entry | `http://localhost:10000` (global Envoy) |
+| Топология | 2 ДЦ (`zone1`, `zone2`), 5 логических сервисов × 2 зоны = 10 бэкенд-инстансов |
+| Публичный вход | `http://localhost:10000` (global Envoy) |
 | Discovery | Consul, single-DC dev agent, tag-based DNS |
-| Adaptive routing | ML heuristic on Prometheus metrics → Control Plane → Envoy Lua filter (per-request weighted zone pinning) |
+| Адаптивная маршрутизация | ML-эвристика на метриках Prometheus → Control Plane → Envoy Lua-фильтр (per-request weighted zone pinning) |
 | Cross-DC config feed | Redis Pub/Sub (`routing:<service>`) |
-| Observability | Prometheus metrics, Grafana dashboards, Alertmanager, Jaeger OTLP tracing, app-stdout telemetry events |
-| Runtime | Docker Compose, ~21 containers, Go 1.26 services, Envoy 1.36 data plane |
+| Observability | Prometheus-метрики, Grafana-дашборды, Alertmanager, Jaeger OTLP-трейсинг, telemetry-события из app stdout |
+| Runtime | Docker Compose, ~21 контейнер, Go 1.26 сервисы, Envoy 1.36 data plane |
 
-## 2. What this is NOT
+## 2. Что этим НЕ является
 
-Deliberate scope limits (see [`ADR.md`](ADR.md) §1.1):
+Сознательные границы скоупа (см. [`ADR.md`](ADR.md) §1.1):
 
-- No mTLS between zones
-- No support for more than 2 datacenters
-- No online ML inference (recommendations are computed offline from rolling metrics windows)
-- Not deployable on Kubernetes / Nomad without rewrite
-- No xDS gRPC discovery (Consul DNS is the only discovery protocol)
+- Нет mTLS между зонами
+- Нет поддержки более 2 дата-центров
+- Нет online ML-инференса (рекомендации считаются офлайн по rolling window метрик)
+- Не разворачивается на Kubernetes / Nomad без переписывания
+- Нет xDS gRPC discovery (Consul DNS — единственный протокол discovery)
 
 ## 3. System Context (C4 — L1)
 
 ```mermaid
 flowchart LR
-    user[External client<br/>traffic-gen, curl, etc]
-    op[Operator<br/>Grafana / Jaeger UI / Consul UI]
+    user[Внешний клиент<br/>traffic-gen, curl, ...]
+    op[Оператор<br/>Grafana / Jaeger UI / Consul UI]
 
     subgraph gateway[geo-distributed-gateway]
-        gw[Public HTTP gateway<br/>:10000]
+        gw[Публичный HTTP-шлюз<br/>:10000]
         obs[Observability stack<br/>:3000 / :9090 / :16686]
     end
 
@@ -54,18 +54,17 @@ flowchart LR
     op -- browser --> obs
 ```
 
-The system has two kinds of consumers:
+У системы два типа потребителей:
 
-1. **HTTP clients** hit a single public port `:10000` and address logical
-   services by URL prefix (`/service-{a..e}/...`).
-2. **Operators** read Grafana dashboards, Jaeger traces, and the Consul UI
-   directly.
+1. **HTTP-клиенты** ходят на один публичный порт `:10000` и адресуют
+   логические сервисы префиксом URL (`/service-{a..e}/...`).
+2. **Операторы** напрямую читают Grafana, Jaeger и Consul UI.
 
 ## 4. Container View (C4 — L2)
 
 ```mermaid
 flowchart TB
-    client[HTTP client]
+    client[HTTP-клиент]
 
     subgraph global[global-net]
         ge[global-envoy<br/>:10000]
@@ -101,7 +100,7 @@ flowchart TB
     client --> ge
     ge --> ze1
     ge --> ze2
-    ge -. weights .-> cp
+    ge -. веса .-> cp
     ze1 --> s1a & s1b & s1c & s1d & s1e
     ze2 --> s2a & s2b & s2c & s2d & s2e
 
@@ -123,48 +122,48 @@ flowchart TB
     alert <-. alerts .-> prom
 ```
 
-(Edges to `s1a` / `s2a` represent the same wiring for every `service-{a..e}` instance.)
+(Стрелки к `s1a` / `s2a` представляют такую же связку для каждого `service-{a..e}`-инстанса.)
 
-### Containers, in one line each
+### Контейнеры, по одной строке на каждый
 
-| Container | Role |
+| Контейнер | Роль |
 |---|---|
-| `global-envoy` | Public L7 entry: path-routes `/service-{X}/*` to `geo_cluster`; Lua filter sets `x-geo` zone pin per request based on weights from `control-plane`; `outlier_detection` on zone endpoints |
-| `zone{1,2}-envoy` | Zonal L7: `prefix_rewrite: "/"`, resolves upstreams via Consul DNS (tag-filtered), per-service clusters with health checks |
-| `service-{a..e}-zone{1,2}-1` | Stub Go HTTP service on `:8080`; self-registers in Consul on startup; emits telemetry JSON Lines to stdout; OTel-instrumented; subscribes to routing hints on Redis |
-| `consul` | Single-DC dev-mode service registry + DNS resolver; static IP `172.30.{0,1,2}.5` in each Docker network |
-| `redis` | Pub/Sub channel `routing:<service>` for ML-derived routing hints (no persistence — `--save "" --appendonly no`) |
-| `jaeger` | All-in-one tracing backend, receives OTLP HTTP on `:4318`, UI on `:16686` |
-| `prometheus` | Scrapes Envoy admin endpoints, all custom services, Alertmanager; 8 alert rules |
-| `grafana` | Dashboards over Prometheus (anonymous admin) |
-| `alertmanager` | Alert routing |
-| `events-collector` | Subscribes to Docker stdout of containers labelled `gateway.component=app`, parses telemetry JSON Lines, exposes Prometheus metrics on `:9100/metrics` |
-| `ml-analyzer` | Offline heuristic over PromQL: computes per-zone weights and rate-limit suggestions, publishes JSON on `:9200/recommendations` |
-| `control-plane` | Pulls `ml-analyzer` every 30s, exposes versioned snapshot on `:9300/config`, publishes per-service changes to Redis |
+| `global-envoy` | Публичный L7-вход: path-route `/service-{X}/*` в `geo_cluster`; Lua-фильтр проставляет `x-geo` zone-pin per request по весам из `control-plane`; `outlier_detection` на zone-endpoints |
+| `zone{1,2}-envoy` | Зональный L7: `prefix_rewrite: "/"`, резолвит апстримы через Consul DNS (tag-filtered), per-service кластеры с health checks |
+| `service-{a..e}-zone{1,2}-1` | Stub Go HTTP-сервис на `:8080`; при старте сам регистрируется в Consul; пишет JSON-телеметрию в stdout; инструментирован OTel; подписан на routing-hints через Redis |
+| `consul` | Single-DC dev-mode service registry + DNS resolver; статический IP `172.30.{0,1,2}.5` в каждой Docker-сети |
+| `redis` | Pub/Sub-канал `routing:<service>` для ML-рекомендаций (без персистентности — `--save "" --appendonly no`) |
+| `jaeger` | All-in-one tracing-бэкенд, принимает OTLP HTTP на `:4318`, UI на `:16686` |
+| `prometheus` | Скрапит Envoy admin-эндпоинты, все кастомные сервисы, Alertmanager; 8 alert-правил |
+| `grafana` | Дашборды поверх Prometheus (anonymous admin) |
+| `alertmanager` | Маршрутизация алертов |
+| `events-collector` | Подписан на Docker stdout контейнеров с лейблом `gateway.component=app`, парсит JSON-события телеметрии, экспонирует Prometheus-метрики на `:9100/metrics` |
+| `ml-analyzer` | Офлайн-эвристика на PromQL: считает per-zone веса и рекомендации rate-limit, публикует JSON на `:9200/recommendations` |
+| `control-plane` | Каждые 30s pull-ит `ml-analyzer`, держит версионированный снапшот на `:9300/config`, публикует per-service изменения в Redis |
 
-## 5. Networking
+## 5. Сети
 
-Three Docker bridge networks isolate traffic:
+Три Docker bridge-сети изолируют трафик:
 
-| Network | Subnet | Members |
+| Сеть | Подсеть | Участники |
 |---|---|---|
-| `global-net` | `172.30.0.0/24` | all observability, support services, both `consul` and `redis` (multi-attached), `global-envoy`, `zone-envoy`s, `jaeger` |
-| `zone1-net` | `172.30.1.0/24` | `zone1-envoy`, all `service-*-zone1-1`, multi-attached `consul`/`jaeger`/`redis` |
-| `zone2-net` | `172.30.2.0/24` | `zone2-envoy`, all `service-*-zone2-1`, multi-attached `consul`/`jaeger`/`redis` |
+| `global-net` | `172.30.0.0/24` | весь observability stack, support-сервисы, `consul`/`redis` (multi-attached), `global-envoy`, оба `zone-envoy`, `jaeger` |
+| `zone1-net` | `172.30.1.0/24` | `zone1-envoy`, все `service-*-zone1-1`, multi-attached `consul`/`jaeger`/`redis` |
+| `zone2-net` | `172.30.2.0/24` | `zone2-envoy`, все `service-*-zone2-1`, multi-attached `consul`/`jaeger`/`redis` |
 
-`consul`, `jaeger`, and `redis` are deliberately attached to all three networks
-so that zone-only containers (apps, zone-envoys) can reach them without
-crossing through `global-envoy`.
+`consul`, `jaeger` и `redis` намеренно подключены ко всем трём сетям, чтобы
+zone-only контейнеры (app и zone-envoy) ходили к ним без перехода через
+`global-envoy`.
 
-`consul` uses pinned IPv4 addresses (`172.30.{0,1,2}.5`) because Envoy
-`dns_resolvers.address` requires an IP literal, not a hostname.
+У `consul` фиксированные IPv4 (`172.30.{0,1,2}.5`), потому что Envoy
+`dns_resolvers.address` принимает только IP-литерал, не hostname.
 
-## 6. Request flow (happy path)
+## 6. Поток запроса (happy path)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Client
+    participant C as Клиент
     participant GE as global-envoy
     participant CP as control-plane
     participant ZE as zone{1,2}-envoy
@@ -172,35 +171,35 @@ sequenceDiagram
     participant APP as service-X-zoneN-1
     participant J as jaeger
 
-    C->>GE: GET /service-a/ping<br/>(W3C traceparent if instrumented)
-    Note over GE: Lua filter on_request:<br/>cache hit? use cached weights<br/>cache miss? httpCall control-plane
-    GE-->>CP: GET /config/weights/service-a<br/>(only on cache miss, TTL 30s)
+    C->>GE: GET /service-a/ping<br/>(W3C traceparent если инструментирован)
+    Note over GE: Lua-фильтр on_request:<br/>cache hit? используем закешированные веса<br/>cache miss? httpCall в control-plane
+    GE-->>CP: GET /config/weights/service-a<br/>(только на cache miss, TTL 30s)
     CP-->>GE: {"zone1":0.6,"zone2":0.4}
-    Note over GE: weighted random ->; add x-geo: zone1
-    GE->>ZE: forward with x-geo + traceparent
-    Note over ZE: route by prefix /service-a/;<br/>prefix_rewrite "/";<br/>cluster service-a-zoneN-cluster
+    Note over GE: weighted random ->; добавляем x-geo: zone1
+    GE->>ZE: forward с x-geo + traceparent
+    Note over ZE: маршрутизация по префиксу /service-a/;<br/>prefix_rewrite "/";<br/>cluster service-a-zoneN-cluster
     ZE->>CON: A-lookup zoneN.service-a.service.consul (DNS:8600)
-    CON-->>ZE: IP of service-a-zoneN-1
+    CON-->>ZE: IP контейнера service-a-zoneN-1
     ZE->>APP: GET /ping
-    Note over APP: otelhttp creates server span;<br/>handler annotates user_id, cabinet_id, zone;<br/>emits JSON telemetry to stdout
+    Note over APP: otelhttp создаёт server span;<br/>handler добавляет user_id, cabinet_id, zone;<br/>пишет JSON-телеметрию в stdout
     APP-->>ZE: 200 + X-Served-By
     ZE-->>GE: 200
     GE-->>C: 200 + X-Served-By
-    APP-->>J: OTLP span (async, batched)
-    GE-->>J: OTLP span (async, batched)
+    APP-->>J: OTLP span (async, батчем)
+    GE-->>J: OTLP span (async, батчем)
 ```
 
-Key invariants:
+Ключевые инварианты:
 
-- App services listen on bare `/ping` and `/health`; the `/service-{X}/` URL
-  prefix is stripped by `prefix_rewrite: "/"` in zone-envoy.
-- `x-geo` header has two consumers: the Lua filter sets it; existing
-  `header.x-geo` routes in `global-envoy.yaml` consume it. Explicit
-  client-side `x-geo: zone1|zone2` bypasses the Lua choice (used by failure
-  tests).
-- If the client doesn't ship a `traceparent`, server span becomes a root.
+- App-сервисы слушают bare `/ping` и `/health`; префикс `/service-{X}/`
+  снимается через `prefix_rewrite: "/"` в zone-envoy.
+- Header `x-geo` имеет двух потребителей: Lua-фильтр его проставляет; уже
+  существующие `header.x-geo` routes в `global-envoy.yaml` его читают.
+  Явный клиентский `x-geo: zone1|zone2` обходит выбор Lua (используется в
+  failure-тестах).
+- Если клиент не прислал `traceparent`, server span становится корневым.
 
-## 7. Adaptive routing cycle
+## 7. Цикл адаптивной маршрутизации
 
 ```mermaid
 sequenceDiagram
@@ -214,52 +213,52 @@ sequenceDiagram
     participant APP as service-*
 
     loop scrape
-        P->>E: scrape envoy_cluster_* metrics
+        P->>E: scrape envoy_cluster_* метрик
     end
 
-    loop every -interval (60s)
+    loop каждые -interval (60s)
         ML->>P: PromQL: p99, rps, error_rate per cluster
         P-->>ML: time-series
-        Note over ML: score = 1/(1+p99_ms/100) * (1-error_rate)<br/>normalise to sum=1.0 per service<br/>rate_limit = max(zone_rps) * 1.5
-        ML->>ML: cache Recommendations in memory
+        Note over ML: score = 1/(1+p99_ms/100) * (1-error_rate)<br/>нормализуем sum=1.0 per service<br/>rate_limit = max(zone_rps) * 1.5
+        ML->>ML: кешируем Recommendations в памяти
     end
 
-    loop every poll-interval (30s)
+    loop каждые poll-interval (30s)
         CP->>ML: GET /recommendations
         ML-->>CP: {weights, rate_limits}
-        Note over CP: DeepEqual vs prev?<br/>different -> bump version, publish
+        Note over CP: DeepEqual c прошлым?<br/>отличается -> bump version, publish
         CP->>R: PUBLISH routing:service-a {...}
         CP->>R: PUBLISH routing:service-b {...}
-        Note over CP: ...one publish per service per change
+        Note over CP: ...по одному publish на сервис на каждое изменение
     end
 
-    R-->>APP: subscriber receives RoutingHints
-    Note over APP: v1: log only
+    R-->>APP: subscriber получает RoutingHints
+    Note over APP: v1: только лог
 
-    loop every request (cache miss, TTL 30s per worker)
+    loop на каждый request (cache miss, TTL 30s per worker)
         LUA->>CP: GET /config/weights/service-X
-        CP-->>LUA: flat {zone1, zone2}
+        CP-->>LUA: плоский {zone1, zone2}
     end
 ```
 
-There are two consumers of the snapshot:
+У снапшота два потребителя:
 
-1. **Lua filter in global-envoy** pulls per-service flat weights synchronously
-   from `:9300/config/weights/<svc>` on cache miss; this is what actually
-   shapes traffic.
-2. **App services** subscribe to Redis `routing:<service>` and currently only
-   log received hints. This is the v1 plumbing for future self-throttling
-   consumers.
+1. **Lua-фильтр в global-envoy** синхронно pull-ит per-service плоские веса
+   с `:9300/config/weights/<svc>` на cache miss — именно это реально
+   формирует трафик.
+2. **App-сервисы** подписаны на Redis `routing:<service>` и сейчас только
+   логируют полученные подсказки. Это v1-каркас для будущих
+   self-throttling consumer-ов.
 
-Both paths feed off the same `Snapshot` struct (`version, updated_at, weights,
-rate_limits`) held in-memory in `control-plane`.
+Оба пути используют один и тот же `Snapshot` (`version, updated_at, weights,
+rate_limits`), который держится in-memory в `control-plane`.
 
-## 8. Failover (zone outage)
+## 8. Failover (отказ зоны)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Client / traffic-gen
+    participant C as Клиент / traffic-gen
     participant GE as global-envoy
     participant ZE1 as zone1-envoy
     participant ZE2 as zone2-envoy
@@ -267,39 +266,40 @@ sequenceDiagram
     participant S2 as service-X-zone2-1
 
     C->>GE: GET /service-X/ping
-    GE->>ZE1: forward (Lua picked zone1)
+    GE->>ZE1: forward (Lua выбрал zone1)
     ZE1->>S1: GET /ping
-    S1--xZE1: connect_failure (container stopped by failure-runner)
-    Note over ZE1: outlier_detection: ejects S1 endpoint;<br/>cluster has no more endpoints
+    S1--xZE1: connect_failure (контейнер остановлен failure-runner-ом)
+    Note over ZE1: outlier_detection: эжектит S1 endpoint;<br/>в cluster больше нет endpoint-ов
     ZE1--xGE: 503 no_healthy_upstream
-    Note over GE: retry_policy: connect-failure,refused-stream,gateway-error,reset<br/>retries -> 2;<br/>geo_cluster has zone1_envoy AND zone2_envoy as endpoints
-    GE->>ZE2: retry on zone2_envoy endpoint
+    Note over GE: retry_policy: connect-failure,refused-stream,gateway-error,reset<br/>retries -> 2;<br/>geo_cluster имеет zone1_envoy И zone2_envoy как endpoints
+    GE->>ZE2: retry на zone2_envoy endpoint
     ZE2->>S2: GET /ping
     S2-->>ZE2: 200
     ZE2-->>GE: 200
     GE-->>C: 200 + X-Served-By: service-X-zone2-1
 ```
 
-This relies on three pieces working together:
+Работает за счёт связки трёх вещей:
 
-- `geo_cluster` in `global-envoy.yaml` lists **both** zone envoys as endpoints
-  with `outlier_detection`, so when one is ejected the cluster fails over
-  automatically (rather than `weighted_clusters` which would re-pick the
-  same cluster on retry — see ADR).
-- `retry_policy` allows the retry to be served by a different endpoint.
-- Validation: `make failure-zone1` stops every container in zone1 for 30s and
-  asserts error rate stays under 5% during the outage.
+- `geo_cluster` в `global-envoy.yaml` содержит **оба** zone-envoy как
+  endpoints с `outlier_detection` — когда один эжектится, кластер
+  автоматически перенаправляет на оставшийся (в отличие от
+  `weighted_clusters`, который при retry заново выбрал бы тот же кластер
+  — см. ADR).
+- `retry_policy` разрешает retry на другом endpoint.
+- Валидация: `make failure-zone1` останавливает все контейнеры zone1 на 30s
+  и проверяет, что error rate во время отказа остаётся ниже 5%.
 
-## 9. Service self-registration
+## 9. Самостоятельная регистрация сервисов
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SVC as service-X-zoneN-1 (Go binary)
+    participant SVC as service-X-zoneN-1 (Go-бинарь)
     participant C as Consul agent
 
-    Note over SVC: startup: read SERVICE_NAME, ZONE, CONSUL_ADDR env;<br/>resolve own IP via net.InterfaceAddrs()
-    SVC->>C: agent.ServiceRegister(name=service-X, id=service-X-zoneN-1,<br/>tags=[zoneN], address=<own_ip>, port=8080,<br/>check=HTTP /health every 5s)
+    Note over SVC: старт: читаем SERVICE_NAME, ZONE, CONSUL_ADDR env;<br/>определяем свой IP через net.InterfaceAddrs()
+    SVC->>C: agent.ServiceRegister(name=service-X, id=service-X-zoneN-1,<br/>tags=[zoneN], address=<own_ip>, port=8080,<br/>check=HTTP /health каждые 5s)
     C-->>SVC: ok
     Note over SVC: serve HTTP /ping, /health
     Note over SVC: SIGTERM
@@ -308,11 +308,11 @@ sequenceDiagram
     Note over SVC: srv.Shutdown(15s timeout)
 ```
 
-Best-effort: any failure (Consul unreachable, registration error) is logged
-and the service keeps serving HTTP. This avoids a cascading restart of all
-10 apps if Consul flaps.
+Best-effort: любая ошибка (Consul недоступен, ошибка регистрации) логируется,
+сервис продолжает обслуживать HTTP. Это предотвращает каскадный рестарт
+всех 10 app-контейнеров при флапе Consul.
 
-## 10. Component internals (selected)
+## 10. Внутреннее устройство компонент (избранное)
 
 ### 10.1 control-plane state
 
@@ -337,16 +337,16 @@ classDiagram
     Snapshot --> RateLimit : per service
 ```
 
-- `Snapshot` is held in an `atomic.Value` — readers (HTTP handlers, Redis
-  publisher loop) never block on the poll goroutine.
-- `Version` increments only when content changes (`reflect.DeepEqual` on
-  weights+limits); identical pulls leave it alone.
-- `lastSuccess` (UnixNano gauge) drives both `/healthz` freshness and
-  `control_plane_age_seconds` metric.
+- `Snapshot` хранится в `atomic.Value` — читатели (HTTP-хендлеры,
+  Redis-publisher) никогда не блокируются на poll-горутине.
+- `Version` инкрементируется только при изменении содержимого
+  (`reflect.DeepEqual` по weights+limits); идентичный pull не двигает её.
+- `lastSuccess` (UnixNano gauge) питает и freshness в `/healthz`, и
+  метрику `control_plane_age_seconds`.
 
-### 10.2 ml-analyzer heuristic
+### 10.2 эвристика ml-analyzer
 
-For each `(service, zone)` pair, every `-interval`:
+Для каждой пары `(service, zone)` каждый `-interval`:
 
 ```text
 p99_ms = histogram_quantile(0.99, rate(envoy_cluster_upstream_rq_time_bucket[5m]))
@@ -354,58 +354,59 @@ rps    = sum(rate(envoy_cluster_upstream_rq_total[5m]))
 err    = sum(rate(envoy_cluster_upstream_rq_xx{class="5"}[5m]))
 
 score   = 1 / (1 + p99_ms/100) * (1 - error_rate)
-weights = normalise(scores) per service so that sum(zone1, zone2) == 1.0
+weights = normalise(scores) per service, так чтобы sum(zone1, zone2) == 1.0
 rps_rec = max(zone_rps_per_service) * 1.5   # fallback: 100
 ```
 
-No model training, no historical retention — pure rolling-window arithmetic.
+Никакого обучения моделей, никакой исторической retention — чистая
+арифметика на rolling-window.
 
-### 10.3 Lua score filter
+### 10.3 Lua-фильтр score
 
-Per-worker (typically 2-4 workers in Envoy) state:
+Per-worker state (обычно 2-4 воркера у Envoy):
 
 ```text
 cache[service] = { weights = {zone1, zone2}, exp = epoch_seconds }
 TTL_SECONDS = 30
 ```
 
-On request:
+На запрос:
 
 ```text
-if client provided x-geo:zone1|zone2 -> respect, return
-service = parse from :path (default service-a)
-weights = cache[service] if fresh, else httpCall(control-plane), cache on success only
+если клиент прислал x-geo:zone1|zone2 -> уважаем, return
+service = распарсить из :path (default service-a)
+weights = cache[service] если свежий, иначе httpCall(control-plane), кешируем только при успехе
 zone    = weighted random
 add x-geo header
 ```
 
-Cache misses cost one synchronous `httpCall` (~5ms p99); cache hits are
-in-process Lua table lookups.
+Cache miss стоит один синхронный `httpCall` (~5ms p99); cache hit — это
+in-process Lua-table lookup.
 
-## 11. State / data stores
+## 11. Состояние / хранилища
 
-| Where | What | Lifetime | Persistence |
+| Где | Что | Время жизни | Персистентность |
 |---|---|---|---|
-| `control-plane` in-memory `atomic.Value` | Latest `Snapshot{version, weights, rate_limits}` | Process | None — restart resets `version` to 0 |
-| `consul` (dev mode) | Service catalog | Process | None — `-dev` is in-memory |
-| `redis` | Pub/Sub channel `routing:<service>` | Per message | None — `--save "" --appendonly no` |
-| `prometheus` | 7d local TSDB | 7 days | Disk (volume) |
-| `jaeger` (all-in-one) | Recent spans | In-memory cap | None |
-| `app` services | None (stateless) | n/a | n/a |
-| Envoy admin / clusters | Endpoint health | Process | None — re-resolved every `dns_refresh_rate=5s` |
+| `control-plane` in-memory `atomic.Value` | Последний `Snapshot{version, weights, rate_limits}` | Процесс | Нет — рестарт обнуляет `version` |
+| `consul` (dev mode) | Каталог сервисов | Процесс | Нет — `-dev` всё в памяти |
+| `redis` | Канал `routing:<service>` | Per message | Нет — `--save "" --appendonly no` |
+| `prometheus` | TSDB на 7d | 7 дней | Диск (volume) |
+| `jaeger` (all-in-one) | Недавние spans | In-memory cap | Нет |
+| `app`-сервисы | Нет (stateless) | n/a | n/a |
+| Envoy admin / clusters | Health endpoint-ов | Процесс | Нет — пересчитывается каждые `dns_refresh_rate=5s` |
 
-Nothing in the gateway path is durable — by design, this is a routing layer,
-not a system of record.
+Ничего на пути запроса не персистентно — by design, это маршрутизирующий
+слой, а не system of record.
 
 ## 12. Observability fabric
 
 ```mermaid
 flowchart LR
-    subgraph signals[Signal sources]
+    subgraph signals[Источники сигналов]
         envoy_admin[Envoy admin /stats]
         app_telemetry[App stdout JSON Lines]
-        otel_traces[OTel spans from apps + traffic-gen]
-        self_metrics[Self-metrics from ec / ml / cp]
+        otel_traces[OTel spans из app + traffic-gen]
+        self_metrics[Self-метрики ec / ml / cp]
     end
 
     envoy_admin --> prom[Prometheus]
@@ -417,22 +418,22 @@ flowchart LR
     prom --> alert[Alertmanager]
 ```
 
-Three independent pipelines:
+Три независимых пайплайна:
 
-1. **Metrics** (Prometheus pull): Envoy admin endpoints + custom service
-   self-metrics + events-collector aggregations from app stdout.
-2. **Traces** (OTel push): traffic-gen and app services export OTLP HTTP to
-   Jaeger, including W3C trace context propagation across hops.
-3. **Logs**: `slog` JSON to stderr is left to `docker logs`; app telemetry
-   events on stdout are consumed only by events-collector (deliberate split,
-   see `Logging & telemetry` conventions).
+1. **Метрики** (Prometheus pull): Envoy admin-эндпоинты + self-метрики
+   кастомных сервисов + агрегации events-collector из app stdout.
+2. **Трейсы** (OTel push): traffic-gen и app-сервисы экспортируют OTLP HTTP
+   в Jaeger, включая распространение W3C trace context между хопами.
+3. **Логи**: `slog` JSON в stderr оставляем для `docker logs`; telemetry
+   события на stdout читает только events-collector (намеренное разделение
+   — см. конвенции «Logging & telemetry»).
 
-## 13. Cardinality discipline
+## 13. Дисциплина кардинальности
 
-`events-collector` and `control-plane` deliberately keep Prometheus label
-sets small:
+`events-collector` и `control-plane` намеренно держат label set
+Prometheus-метрик маленьким:
 
-| Metric | Labels | Max series |
+| Метрика | Лейблы | Max series |
 |---|---|---|
 | `events_total` | `service, zone, kind` | 5 × 2 × 4 = 40 |
 | `requests_total` | `service, zone, status_class` | 5 × 2 × 4 = 40 |
@@ -440,31 +441,31 @@ sets small:
 | `request_latency_ms` | `service, zone` (histogram, 11 buckets) | ~110 |
 | `control_plane_redis_publishes_total` | `service, result` | 5 × 2 = 10 |
 
-`user_id` and `cabinet_id` are intentionally NOT Prometheus labels — they
-go into Jaeger span attributes only. This caps total cardinality at well
-under 500 series for the whole gateway.
+`user_id` и `cabinet_id` сознательно НЕ являются Prometheus-лейблами —
+они идут только в Jaeger span attributes. Это удерживает суммарную
+кардинальность всего шлюза существенно ниже 500 серий.
 
-## 14. Build & run
+## 14. Сборка и запуск
 
-| Action | Command |
+| Действие | Команда |
 |---|---|
-| Start | `make up` |
-| Stop | `make down` |
-| Status | `make status` |
-| Smoke load (100 RPS × 30s) | `make traffic-gen` |
-| Zone-1 outage chaos test | `make failure-zone1` |
-| Partial outage (half of zone1) | `make failure-partial` |
+| Запуск | `make up` |
+| Остановка | `make down` |
+| Статус | `make status` |
+| Smoke-нагрузка (100 RPS × 30s) | `make traffic-gen` |
+| Хаос-тест: отказ zone1 | `make failure-zone1` |
+| Частичный отказ (половина zone1) | `make failure-partial` |
 
-Each Go binary builds inside its own multi-stage Dockerfile with an inline
-`go.work` so the local `replace ../../sdk` directive resolves without
-touching network. See `app/Dockerfile` / `cmd/*/Dockerfile`.
+Каждый Go-бинарь собирается в собственном multi-stage Dockerfile с inline
+`go.work`, чтобы локальная директива `replace ../../sdk` резолвилась без
+обращения к сети. См. `app/Dockerfile` / `cmd/*/Dockerfile`.
 
-## 15. Read next
+## 15. Что читать дальше
 
-| If you want to understand… | Read |
+| Если хочется разобраться в… | Читать |
 |---|---|
-| Why each piece is the way it is | [`ADR.md`](ADR.md) |
-| What the system must do / NFRs | [`Requirements.md`](Requirements.md) |
-| How to operate / debug it | [`Runbook.md`](Runbook.md) |
-| Exact HTTP request / response shapes | [`openapi.yaml`](openapi.yaml) |
-| How to run it locally | [`../README.md`](../README.md) |
+| Почему каждая деталь сделана так, как сделана | [`ADR.md`](ADR.md) |
+| Что система должна делать / NFR | [`Requirements.md`](Requirements.md) |
+| Как эксплуатировать и дебажить | [`Runbook.md`](Runbook.md) |
+| Точные формы HTTP request / response | [`openapi.yaml`](openapi.yaml) |
+| Как поднять локально | [`../README.md`](../README.md) |

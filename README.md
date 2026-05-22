@@ -1,57 +1,57 @@
 # Geo-Distributed Gateway
 
-Two-DC HTTP gateway in Docker Compose: 10 stub services, Envoy data plane, Consul discovery, ML-driven adaptive routing.
+HTTP-шлюз на два дата-центра в Docker Compose: 10 stub-сервисов, Envoy в роли data plane, Consul для discovery, ML-эвристика для адаптивной маршрутизации между зонами.
 
-## Requirements
+## Требования
 
-- Docker 25+ (or compatible)
+- Docker 25+ (или совместимый)
 - GNU Make
-- Free TCP ports: 3000, 4318, 6379, 8500, 9090, 9093, 9100, 9200, 9300, 10000, 16686, 19000-19002
-- Free Docker subnets: 172.30.0.0/24, 172.30.1.0/24, 172.30.2.0/24
+- Свободные TCP-порты: 3000, 4318, 6379, 8500, 9090, 9093, 9100, 9200, 9300, 10000, 16686, 19000-19002
+- Свободные Docker-подсети: 172.30.0.0/24, 172.30.1.0/24, 172.30.2.0/24
 
-## Quick start
+## Быстрый старт
 
 ```bash
-make up         # build + start full stack (~21 containers)
-make status     # docker compose ps
-make traffic-gen   # 100 RPS x 30s smoke test
-make down       # stop + remove
+make up           # собрать и поднять весь стек (~21 контейнер)
+make status       # docker compose ps
+make traffic-gen  # нагрузка 100 RPS x 30s (smoke-тест)
+make down         # остановить и удалить
 ```
 
-## Endpoints
+## Эндпоинты
 
-| Service | Port | What |
+| Сервис | Порт | Что |
 |---|---|---|
-| Global Envoy (public) | 10000 | `GET /service-{a..e}/ping`, `GET /ping` |
-| Consul UI | 8500 | Service catalog |
-| Jaeger UI | 16686 | Distributed traces |
-| Prometheus | 9090 | Metrics + alerts |
-| Grafana | 3000 | Dashboards (anonymous admin) |
-| Alertmanager | 9093 | Alert routing |
+| Global Envoy (публичный) | 10000 | `GET /service-{a..e}/ping`, `GET /ping` |
+| Consul UI | 8500 | Каталог сервисов |
+| Jaeger UI | 16686 | Распределённые трейсы |
+| Prometheus | 9090 | Метрики и алерты |
+| Grafana | 3000 | Дашборды (anonymous admin) |
+| Alertmanager | 9093 | Маршрутизация алертов |
 | Events Collector | 9100 | `/metrics`, `/healthz` |
 | ML Analyzer | 9200 | `/recommendations`, `/healthz`, `/metrics` |
 | Control Plane | 9300 | `/config`, `/config/weights/{service}`, `/healthz`, `/metrics` |
 | Envoy admin | 19000 (global), 19001 (zone1), 19002 (zone2) | `/stats`, `/clusters`, `/config_dump` |
 
-Full HTTP API spec: [`docs/openapi.yaml`](docs/openapi.yaml).
+Полная спека HTTP API: [`docs/openapi.yaml`](docs/openapi.yaml).
 
-## Features
+## Возможности
 
-- **10 stub services** across 2 zones (`service-{a..e} x zone{1,2}`) with self-registration in Consul on startup.
-- **Tag-based Consul DNS discovery** (`<zone>.<service>.service.consul`) consumed by zone-envoy via static resolver.
-- **Global Envoy** path-routes `/service-{a..e}/*` to a shared `geo_cluster` with `outlier_detection` for cross-zone failover.
-- **Lua score filter** in global-envoy: per-request weighted zone pinning via `x-geo` header, weights fetched from Control Plane with 30s per-worker cache and 50/50 fallback.
-- **Events Collector**: Docker SDK subscribes to stdout of containers labelled `gateway.component=app`, parses telemetry JSON Lines, exposes Prometheus metrics with bounded cardinality (no `user_id` / `cabinet_id`).
-- **ML Analyzer**: PromQL-based heuristic (`score = 1 / (1 + p99_ms/100) * (1 - error_rate)`), publishes JSON recommendations on `:9200/recommendations`.
-- **Control Plane**: polls ML every 30s, exposes versioned snapshot on `:9300/config`, publishes to Redis `routing:<service>` Pub/Sub on content change.
-- **Routing hints subscriber** in SDK: app services consume `routing:<service>` and log received hints (v1 — observability only).
-- **OTel tracing** end-to-end: `traffic-gen` → `global-envoy` → `service-X`, exported to Jaeger via OTLP HTTP. Server spans carry `user_id`, `cabinet_id`, `zone` attributes.
-- **Chaos tools**: `make failure-zone1`, `make failure-partial` exercise zone outage; `make traffic-gen` for synthetic load.
+- **10 stub-сервисов** на две зоны (`service-{a..e} x zone{1,2}`), каждый при старте сам регистрируется в Consul.
+- **Tag-based Consul DNS discovery** (`<zone>.<service>.service.consul`) — zone-envoy резолвит апстримы через статический resolver на порт 8600.
+- **Global Envoy** делает path-route `/service-{a..e}/*` в общий `geo_cluster` с `outlier_detection` для кросс-зонального failover.
+- **Lua-фильтр score** в global-envoy: для каждого запроса выбирает зону взвешенным random'ом по весам из Control Plane, проставляет `x-geo` header. Кэш на воркер с TTL 30s, fallback 50/50 при недоступном CP.
+- **Events Collector**: подписывается через Docker SDK на stdout контейнеров с лейблом `gateway.component=app`, парсит JSON-события телеметрии, экспонирует Prometheus-метрики с ограниченной кардинальностью (без `user_id` / `cabinet_id`).
+- **ML Analyzer**: эвристика на PromQL (`score = 1 / (1 + p99_ms/100) * (1 - error_rate)`), публикует JSON-рекомендации на `:9200/recommendations`.
+- **Control Plane**: каждые 30s опрашивает ML, держит версионированный снапшот на `:9300/config`, при изменении контента публикует в Redis `routing:<service>`.
+- **Подписчик routing hints в SDK**: app-сервисы слушают `routing:<service>` и логируют полученные подсказки (v1 — только наблюдаемость).
+- **OTel-трейсинг** end-to-end: `traffic-gen` → `global-envoy` → `service-X`, экспорт в Jaeger через OTLP HTTP. Server-spans содержат атрибуты `user_id`, `cabinet_id`, `zone`.
+- **Хаос-инструменты**: `make failure-zone1`, `make failure-partial` имитируют отказ зоны; `make traffic-gen` — синтетическая нагрузка.
 
-## Testing
+## Тестирование
 
 ```bash
-# Per-module Go tests (run inside a Go 1.26 container if Go is not local):
+# Go-тесты по модулям (через Go 1.26 контейнер, если локально Go нет):
 cd sdk && go test ./...
 cd app && go test ./...
 cd cmd/ml-analyzer && go test ./...
@@ -60,23 +60,23 @@ cd cmd/ml-analyzer && go test ./...
 make up && make traffic-gen && make failure-zone1
 ```
 
-## Repository layout
+## Структура репозитория
 
 ```
-app/                  Stub HTTP service
-sdk/                  Shared library (client, config, stats, telemetry)
-cmd/events-collector/ Docker logs -> Prometheus
-cmd/ml-analyzer/      Prometheus -> recommendations JSON
-cmd/control-plane/    ML -> snapshot + Redis publish
-cmd/traffic-gen/      Load generator
-cmd/failure-runner/   Chaos / failover harness
-envoy/                3 Envoy configs (global + zone1 + zone2) + Lua filter
-monitoring/           Prometheus + Grafana + Alertmanager configs
-docs/                 ADR, Requirements, Runbook, OpenAPI
+app/                  Stub HTTP-сервис
+sdk/                  Общая библиотека (client, config, stats, telemetry)
+cmd/events-collector/ Docker-логи -> Prometheus
+cmd/ml-analyzer/      Prometheus -> JSON-рекомендации
+cmd/control-plane/    ML -> снапшот + Redis publish
+cmd/traffic-gen/      Нагрузочный генератор
+cmd/failure-runner/   Хаос-инжектор / тесты failover
+envoy/                3 конфига Envoy (global + zone1 + zone2) + Lua-фильтр
+monitoring/           Конфиги Prometheus + Grafana + Alertmanager
+docs/                 ADR, Requirements, Runbook, Architecture, OpenAPI
 ```
 
-## Architecture
+## Архитектура
 
-[`docs/Architecture.md`](docs/Architecture.md) — top-down overview (system context, container diagram, request/failover/ML flows, component internals). Designed for cold reading.
+[`docs/Architecture.md`](docs/Architecture.md) — обзор сверху вниз (system context, container-диаграмма, потоки запросов / failover / ML, внутреннее устройство компонент). Рассчитан на холодное чтение без онбординга.
 
-Supporting docs: [`docs/ADR.md`](docs/ADR.md) (rationale), [`docs/Runbook.md`](docs/Runbook.md) (ops), [`docs/Requirements.md`](docs/Requirements.md) (FR/NFR).
+Сопутствующие документы: [`docs/ADR.md`](docs/ADR.md) (обоснования решений), [`docs/Runbook.md`](docs/Runbook.md) (операционка), [`docs/Requirements.md`](docs/Requirements.md) (функциональные и нефункциональные требования).
