@@ -41,10 +41,9 @@ import (
 	"github.com/geo-distributed-gateway/sdk/config"
 )
 
-// Snapshot is the in-memory routing-policy snapshot.
-// Field names are LOCKED (see plan.md T4 step 3): T7 consumes
-// snapshot.RateLimits[svc].RPS verbatim, and the JSON tags pin the
-// /config wire contract.
+// Snapshot is the in-memory routing-policy snapshot. Field names and JSON
+// tags form the wire contract: /config response and the Redis publisher
+// payload both consume them verbatim.
 type Snapshot struct {
 	Version    int                            `json:"version"`
 	UpdatedAt  time.Time                      `json:"updated_at"`
@@ -52,13 +51,13 @@ type Snapshot struct {
 	RateLimits map[string]RateLimit           `json:"rate_limits"`
 }
 
-// RateLimit is the per-service rate limit. Field name LOCKED.
+// RateLimit is the per-service rate limit. Field name is part of the wire contract.
 type RateLimit struct {
 	RPS int `json:"rps"`
 }
 
-// recommendations mirrors the JSON wire contract published by ml-analyzer
-// (see plan.md T3 step 6). Decoded into our Snapshot in pullOnce.
+// recommendations mirrors the JSON wire contract published by ml-analyzer.
+// Decoded into our Snapshot in pullOnce.
 type recommendations struct {
 	UpdatedAt  string                        `json:"updated_at"`
 	Weights    map[string]map[string]float64 `json:"weights"`
@@ -376,11 +375,6 @@ func handleWeights(st *state) http.HandlerFunc {
 // enough (within maxAge), otherwise 503. This combines two concerns:
 //  1. "Never had a successful pull" — initial state with version=0 → 503
 //  2. "ML went down after working" — last success is too old → 503
-//
-// Plan T4 step 5 specifies "200 if version > 0", but the same plan's acceptance
-// scenario A requires 503 after ML is stopped (when version is still > 0).
-// Resolving the conflict in favor of freshness gives a real liveness signal
-// (see DL-T4-002).
 func handleHealthz(st *state, maxAge time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		snap := st.get()
@@ -409,7 +403,7 @@ func handleHealthz(st *state, maxAge time.Duration) http.HandlerFunc {
 
 // handleMetrics serves a minimal Prometheus text-format exposition.
 // We intentionally hand-roll the format instead of pulling in
-// prometheus/client_golang to keep this binary's dep tree empty (see DL-T4-001).
+// prometheus/client_golang to keep this binary's dep tree empty.
 func handleMetrics(st *state) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		snap := st.get()

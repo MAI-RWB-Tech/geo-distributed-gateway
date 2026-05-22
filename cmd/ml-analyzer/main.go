@@ -11,7 +11,7 @@
 //	GET /metrics          Prometheus text exposition of self-metrics.
 //
 // The recommendations are pure suggestions — applying them is the job of
-// Control Plane (T4). See plan.md → T3 for the full specification.
+// Control Plane.
 //
 // Usage:
 //
@@ -47,7 +47,6 @@ import (
 )
 
 // Service list is fixed by the project topology (5 services × 2 zones).
-// See CLAUDE.md → Naming conventions.
 var services = []string{"service-a", "service-b", "service-c", "service-d", "service-e"}
 var zones = []string{"zone1", "zone2"}
 
@@ -67,9 +66,9 @@ type RateLimit struct {
 	RPS float64 `json:"rps"`
 }
 
-// Recommendations is the locked JSON contract published on GET /recommendations.
-// The shape — including key names "updated_at", "weights", "rate_limits", "zone1",
-// "zone2", "rps" — is required by Control Plane (T4) per plan.md.
+// Recommendations is the JSON wire contract published on GET /recommendations.
+// Key names — "updated_at", "weights", "rate_limits", "zone1", "zone2", "rps"
+// — are consumed verbatim by Control Plane.
 type Recommendations struct {
 	UpdatedAt  string                 `json:"updated_at"`
 	Weights    map[string]ZoneWeights `json:"weights"`
@@ -381,7 +380,7 @@ func main() {
 		*prom = "http://prometheus:9090"
 	}
 
-	// Operational logs → stderr (JSON). See CLAUDE.md → Logging & telemetry.
+	// Operational logs → stderr (JSON).
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
 	if *interval <= 0 {

@@ -85,18 +85,7 @@ function envoy_on_request(request_handle)
   local weights, was_fallback = get_weights(request_handle, service)
   local zone = pick_zone(weights)
   headers:add("x-geo", zone)
-  -- Note: sentinel response-header `x-route-fallback` from plan.md T6 is not
-  -- emitted. The trampoline via dynamicMetadata / filterState / request-header
-  -- round-trip is not viable in Envoy 1.36 Lua bindings:
-  --   * dynamicMetadata():get(ns) returns nil on response phase even after
-  --     set(ns, k, v) succeeded on request phase.
-  --   * After httpCall(...) the request-side headers handle becomes invalid
-  --     ("object used outside of proper scope") — can't add/remove headers.
-  -- Fallback occurrences are visible through structured warn-logs above:
-  --   `docker logs global-envoy | grep "score:.*fallback"`.
-  -- See DL-T6-004.
 end
 
 function envoy_on_response(response_handle)
-  -- No-op in Envoy 1.36; see envoy_on_request comment about trampoline.
 end

@@ -1,6 +1,6 @@
 # NOTE: UC-02 in Requirements describes xDS-based discovery; this implementation
 # uses Consul DNS (tag-based SRV queries) — functionally equivalent for v1.
-# See ADR §5 + CLAUDE.md "Service discovery" section.
+# See ADR §5 for the discovery contract.
 
 static_resources:
   listeners:

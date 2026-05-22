@@ -2,9 +2,8 @@
 // `gateway.component=app`, parses JSON telemetry events emitted by the
 // sdk/telemetry collector, and exposes them as Prometheus metrics on :9100.
 //
-// Cardinality is intentionally bounded (see CLAUDE.md → "Logging & telemetry"
-// and plan.md → T2): only {service, zone, kind|status_class} appear as labels.
-// Per-user/cabinet detail belongs in Jaeger spans (T5), not Prometheus.
+// Cardinality is intentionally bounded: only {service, zone, kind|status_class}
+// appear as labels. Per-user/cabinet detail belongs in Jaeger spans, not Prometheus.
 //
 // The service does NOT subscribe to docker `events` for late-joining
 // containers — v1 only tracks containers that exist at startup. Container
@@ -41,7 +40,7 @@ import (
 
 const (
 	// componentLabel is the docker label set on every app container by
-	// docker-compose.yml (see CLAUDE.md → "Naming conventions").
+	// docker-compose.yml.
 	componentLabel = "gateway.component=app"
 )
 
@@ -80,9 +79,9 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 }
 
 // statusClass collapses a raw HTTP status code into one of "2xx"/"3xx"/
-// "4xx"/"5xx"/"other" to keep label cardinality bounded (see plan.md T2).
-// Codes outside 100..599 are reported as "other" so that malformed events
-// never blow up the time-series count.
+// "4xx"/"5xx"/"other" to keep label cardinality bounded. Codes outside
+// 100..599 are reported as "other" so that malformed events never blow
+// up the time-series count.
 func statusClass(code int) string {
 	switch {
 	case code >= 200 && code < 300:
@@ -165,7 +164,7 @@ func streamContainer(ctx context.Context, cli *client.Client, c container.Summar
 		}
 		var ev telemetry.Event
 		if err := json.Unmarshal(line, &ev); err != nil {
-			// Malformed JSON line — ignore silently per plan.md T2 step 3.
+			// Malformed JSON line — ignore silently.
 			continue
 		}
 		m.record(ev)
@@ -214,7 +213,7 @@ func main() {
 	m := newMetrics(reg)
 
 	// List containers labelled as app instances. We subscribe to whatever
-	// exists at startup; v1 does not handle late joiners (see plan.md T2).
+	// exists at startup; v1 does not handle late joiners.
 	args := filters.NewArgs()
 	args.Add("label", componentLabel)
 	containers, err := cli.ContainerList(ctx, container.ListOptions{

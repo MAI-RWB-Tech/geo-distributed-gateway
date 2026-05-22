@@ -27,9 +27,8 @@ import (
 // params (timeouts, retries); RoutingHints is ML-derived per-zone weights
 // and rate limits, propagated via Redis Pub/Sub.
 //
-// Field names and JSON tags are LOCKED by plan.md T7 step 1 — the wire
-// contract is consumed by Control Plane (publisher) and any future subscriber
-// (e.g., a self-throttling app worker in v2).
+// Field names and JSON tags are the wire contract — consumed by Control Plane
+// (publisher) and any future subscriber (e.g., a self-throttling app worker).
 type RoutingHints struct {
 	Service    string             `json:"service"`
 	Version    int                `json:"version"`

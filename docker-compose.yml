@@ -4,7 +4,7 @@ services:
   # Single Consul agent in dev mode (single DC "dc1"). Attached to all three
   # networks so app containers in zoneN-net can register, and zone-envoy in
   # zoneN-net + global-net can resolve via Consul DNS on :8600.
-  # See CLAUDE.md → "Service discovery" and ADR §5.
+  # See ADR §5 for the discovery contract.
 
   consul:
     image: hashicorp/consul:1.18
@@ -29,9 +29,8 @@ services:
       start_period: 5s
 
   # ── Zone 1 apps (5 services × 1 instance each) ──────────────────────────────
-  # Container, service-name, zone all follow CLAUDE.md "Naming conventions".
-  # Labels enable label-based filtering by events-collector (T2).
-  # OTLP_ENDPOINT and REDIS_URL are no-ops until T5/T7 wire them in.
+  # Naming: container=service-<name>-<zone>-<n>, Consul service name=<name>,
+  # tag=zone1|zone2. Labels enable label-based filtering by events-collector.
 
   service-a-zone1-1:
     build: { context: ., dockerfile: app/Dockerfile }
@@ -372,7 +371,7 @@ services:
       - ENVOY_UID=0
     volumes:
       - ./envoy/global-envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./envoy/lua:/etc/envoy/lua:ro   # populated by T6 (Lua score plugin)
+      - ./envoy/lua:/etc/envoy/lua:ro   # score Lua filter
     ports:
       - "10000:10000"   # main gateway (FR-01: единая точка входа)
       - "19000:9901"    # admin API for Prometheus
@@ -391,8 +390,8 @@ services:
       start_period: 5s
 
   # ── Tracing & shared backends ────────────────────────────────────────────────
-  # Jaeger uses the official all-in-one image — no Dockerfile needed.
-  # Wired up to actual OTLP exporters in T5.
+  # Jaeger uses the official all-in-one image; receives OTLP HTTP from apps
+  # and traffic-gen.
 
   jaeger:
     image: jaegertracing/all-in-one:1.60
@@ -404,7 +403,7 @@ services:
       - "4318:4318"     # OTLP HTTP
     networks: [global-net, zone1-net, zone2-net]
 
-  # Redis is used by T7 (cross-DC config feed via pub/sub).
+  # Redis carries cross-DC routing-hints pub/sub between control-plane and apps.
   # No persistence — pub/sub messages are ephemeral by design.
   redis:
     image: redis:7-alpine
@@ -418,7 +417,7 @@ services:
       timeout: 2s
       retries: 5
 
-  # ── Group B service stubs (real images land in T2/T3/T4) ─────────────────────
+  # ── Support services ────────────────────────────────────────────────────────
   # All three start as "sleep infinity" containers so the compose stack is
   # complete and ports are reserved. They are NOT healthchecked here — task
   # owners add proper healthchecks together with the real code.

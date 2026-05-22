@@ -79,14 +79,6 @@ paths:
             X-Zone:
               description: Zone of the upstream
               schema: { type: string, enum: [zone1, zone2] }
-            X-Route-Fallback:
-              description: |
-                NOT EMITTED in current build. Plan T6 acceptance expected this
-                sentinel header on Control Plane failure; trampoline through
-                dynamicMetadata is broken in Envoy 1.36 Lua bindings (see
-                DL-T6-001). Fallback is observable via `docker logs
-                global-envoy | grep "score:.*fallback"` instead.
-              schema: { type: string }
           content:
             application/json:
               schema:
@@ -193,7 +185,7 @@ paths:
         - `control_plane_config_version` (gauge)
         - `control_plane_ml_pulls_total{result}` (counter)
         - `control_plane_age_seconds` (gauge)
-        - `control_plane_redis_publishes_total{service,result}` (counter, T7)
+        - `control_plane_redis_publishes_total{service,result}` (counter)
 
         **ML Analyzer (:9200)**:
         - `ml_recommendations_generated_total` (counter)
@@ -309,8 +301,8 @@ components:
     RoutingHints:
       type: object
       description: |
-        Payload published by Control Plane to Redis channel `routing:<service>`
-        (T7). Consumer: `sdk/config.RoutingHintsSubscriber` in app services.
+        Payload published by Control Plane to Redis channel `routing:<service>`.
+        Consumer: `sdk/config.RoutingHintsSubscriber` in app services.
       required: [service, version, updated_at, weights, rate_limits]
       properties:
         service: { type: string, example: service-a }

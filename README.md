@@ -72,14 +72,9 @@ cmd/traffic-gen/      Load generator
 cmd/failure-runner/   Chaos / failover harness
 envoy/                3 Envoy configs (global + zone1 + zone2) + Lua filter
 monitoring/           Prometheus + Grafana + Alertmanager configs
-docs/                 ADR, Requirements, Runbook, Decision-Log, OpenAPI
+docs/                 ADR, Requirements, Runbook, OpenAPI
 ```
 
-## Notable design decisions
+## Architecture
 
-Captured chronologically in [`docs/Decision-Log.md`](docs/Decision-Log.md) (29 entries as of integration).
-Architecture rationale: [`docs/ADR.md`](docs/ADR.md). Operational runbook: [`docs/Runbook.md`](docs/Runbook.md).
-
-## Project conventions
-
-Names, ports, DNS scheme, Dockerfile pattern, telemetry split (stdout vs stderr) — locked in [`CLAUDE.md`](CLAUDE.md).
+See [`docs/ADR.md`](docs/ADR.md) for design rationale and [`docs/Runbook.md`](docs/Runbook.md) for operational procedures.

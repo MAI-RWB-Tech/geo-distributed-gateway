@@ -219,11 +219,11 @@ func main() {
 		}
 	}
 
-	// Routing-hints subscriber (T7): listens on Redis Pub/Sub channel
+	// Routing-hints subscriber: listens on Redis Pub/Sub channel
 	// "routing:<service>" for ML-derived weights/rate_limits. In v1 we just
 	// log received hints — actual application to routing lives in Envoy
-	// (Lua filter, T6). The subscriber is independent of the file-watcher
-	// (see DL-T7-001): different contracts, different channels, no merging.
+	// (Lua filter). The subscriber is independent of the file-watcher:
+	// different contracts, different channels, no merging.
 	var hintsSub *config.RoutingHintsSubscriber
 	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
 		s, err := config.NewRoutingHintsSubscriber(redisURL, serviceName)
