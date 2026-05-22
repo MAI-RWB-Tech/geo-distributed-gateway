@@ -98,8 +98,8 @@ func main() {
 	probeURL     := flag.String("probe-url", "http://localhost:10000/ping", "Gateway URL to probe during scenario")
 	probeRPS     := flag.Int("probe-rps", 20, "Probe requests per second during scenario")
 	zones := zonesFlag{
-		"zone1": {"app-zone1-1", "app-zone1-2"},
-		"zone2": {"app-zone2-1", "app-zone2-2"},
+		"zone1": {"service-a-zone1-1", "service-b-zone1-1", "service-c-zone1-1", "service-d-zone1-1", "service-e-zone1-1"},
+		"zone2": {"service-a-zone2-1", "service-b-zone2-1", "service-c-zone2-1", "service-d-zone2-1", "service-e-zone2-1"},
 	}
 	flag.Var(zones, "zone", "Zone containers: -zone name=c1,c2 (repeatable)")
 	flag.Parse()

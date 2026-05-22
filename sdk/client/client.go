@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // correlationCounter is used to generate monotonically increasing correlation IDs.
@@ -34,6 +36,12 @@ func (o *Options) defaults() {
 		// Apply Timeout to the provided client; transport and other settings are preserved.
 		o.HTTPClient.Timeout = o.Timeout
 	}
+	// Wrap the transport with otelhttp so each outbound request becomes a
+	// client span and gets W3C traceparent headers injected automatically.
+	if o.HTTPClient.Transport == nil {
+		o.HTTPClient.Transport = http.DefaultTransport
+	}
+	o.HTTPClient.Transport = otelhttp.NewTransport(o.HTTPClient.Transport)
 }
 
 // Client sends requests to the gateway with mandatory routing headers.
