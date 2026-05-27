@@ -1,3 +1,7 @@
+# NOTE: UC-02 in Requirements describes xDS-based discovery; this implementation
+# uses Consul DNS (tag-based SRV queries) — functionally equivalent for v1.
+# See ADR §5 for the discovery contract.
+
 static_resources:
   listeners:
     - name: listener_zone1
@@ -17,10 +21,52 @@ static_resources:
                     - name: zone1_service
                       domains: ["*"]
                       routes:
-                        - match:
-                            prefix: "/"
+                        # 5 service-specific routes; prefix_rewrite strips
+                        # "/service-X" so upstream sees bare "/ping" / "/health".
+                        - match: { prefix: "/service-a/" }
                           route:
-                            cluster: app_zone1_cluster
+                            cluster: service-a-zone1-cluster
+                            prefix_rewrite: "/"
+                            retry_policy:
+                              retry_on: "connect-failure,refused-stream,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-b/" }
+                          route:
+                            cluster: service-b-zone1-cluster
+                            prefix_rewrite: "/"
+                            retry_policy:
+                              retry_on: "connect-failure,refused-stream,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-c/" }
+                          route:
+                            cluster: service-c-zone1-cluster
+                            prefix_rewrite: "/"
+                            retry_policy:
+                              retry_on: "connect-failure,refused-stream,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-d/" }
+                          route:
+                            cluster: service-d-zone1-cluster
+                            prefix_rewrite: "/"
+                            retry_policy:
+                              retry_on: "connect-failure,refused-stream,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 2s
+                        - match: { prefix: "/service-e/" }
+                          route:
+                            cluster: service-e-zone1-cluster
+                            prefix_rewrite: "/"
+                            retry_policy:
+                              retry_on: "connect-failure,refused-stream,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 2s
+                        # Backward-compat: bare /ping → default service (service-a).
+                        - match: { prefix: "/ping" }
+                          route:
+                            cluster: service-a-zone1-cluster
                             retry_policy:
                               retry_on: "connect-failure,refused-stream,gateway-error,reset"
                               num_retries: 2
@@ -29,36 +75,161 @@ static_resources:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
   clusters:
-    - name: app_zone1_cluster
+    # Per-service clusters. LOGICAL_DNS + explicit Consul resolver on :8600 +
+    # tag-prefixed DNS name ("zone1.service-a.service.consul") gives us
+    # zone-filtered service discovery without xDS. respect_dns_ttl makes
+    # Envoy honor Consul's TTL so re-registrations propagate within ~5s.
+
+    - name: service-a-zone1-cluster
       connect_timeout: 1s
-      type: STRICT_DNS
+      type: LOGICAL_DNS
       lb_policy: ROUND_ROBIN
+      dns_resolvers:
+        - socket_address: { address: 172.30.1.5, port_value: 8600 }
+      respect_dns_ttl: true
+      dns_refresh_rate: 5s
+      dns_lookup_family: V4_ONLY
       health_checks:
         - timeout: 1s
           interval: 5s
           unhealthy_threshold: 2
           healthy_threshold: 1
-          http_health_check:
-            path: "/health"
+          http_health_check: { path: "/health" }
       outlier_detection:
         consecutive_5xx: 3
         interval: 5s
         base_ejection_time: 15s
         max_ejection_percent: 100
       load_assignment:
-        cluster_name: app_zone1_cluster
+        cluster_name: service-a-zone1-cluster
         endpoints:
           - lb_endpoints:
               - endpoint:
                   address:
                     socket_address:
-                      address: app-zone1-1
+                      address: zone1.service-a.service.consul
                       port_value: 8080
+
+    - name: service-b-zone1-cluster
+      connect_timeout: 1s
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      dns_resolvers:
+        - socket_address: { address: 172.30.1.5, port_value: 8600 }
+      respect_dns_ttl: true
+      dns_refresh_rate: 5s
+      dns_lookup_family: V4_ONLY
+      health_checks:
+        - timeout: 1s
+          interval: 5s
+          unhealthy_threshold: 2
+          healthy_threshold: 1
+          http_health_check: { path: "/health" }
+      outlier_detection:
+        consecutive_5xx: 3
+        interval: 5s
+        base_ejection_time: 15s
+        max_ejection_percent: 100
+      load_assignment:
+        cluster_name: service-b-zone1-cluster
+        endpoints:
+          - lb_endpoints:
               - endpoint:
                   address:
                     socket_address:
-                      address: app-zone1-2
+                      address: zone1.service-b.service.consul
+                      port_value: 8080
+
+    - name: service-c-zone1-cluster
+      connect_timeout: 1s
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      dns_resolvers:
+        - socket_address: { address: 172.30.1.5, port_value: 8600 }
+      respect_dns_ttl: true
+      dns_refresh_rate: 5s
+      dns_lookup_family: V4_ONLY
+      health_checks:
+        - timeout: 1s
+          interval: 5s
+          unhealthy_threshold: 2
+          healthy_threshold: 1
+          http_health_check: { path: "/health" }
+      outlier_detection:
+        consecutive_5xx: 3
+        interval: 5s
+        base_ejection_time: 15s
+        max_ejection_percent: 100
+      load_assignment:
+        cluster_name: service-c-zone1-cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: zone1.service-c.service.consul
+                      port_value: 8080
+
+    - name: service-d-zone1-cluster
+      connect_timeout: 1s
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      dns_resolvers:
+        - socket_address: { address: 172.30.1.5, port_value: 8600 }
+      respect_dns_ttl: true
+      dns_refresh_rate: 5s
+      dns_lookup_family: V4_ONLY
+      health_checks:
+        - timeout: 1s
+          interval: 5s
+          unhealthy_threshold: 2
+          healthy_threshold: 1
+          http_health_check: { path: "/health" }
+      outlier_detection:
+        consecutive_5xx: 3
+        interval: 5s
+        base_ejection_time: 15s
+        max_ejection_percent: 100
+      load_assignment:
+        cluster_name: service-d-zone1-cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: zone1.service-d.service.consul
+                      port_value: 8080
+
+    - name: service-e-zone1-cluster
+      connect_timeout: 1s
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      dns_resolvers:
+        - socket_address: { address: 172.30.1.5, port_value: 8600 }
+      respect_dns_ttl: true
+      dns_refresh_rate: 5s
+      dns_lookup_family: V4_ONLY
+      health_checks:
+        - timeout: 1s
+          interval: 5s
+          unhealthy_threshold: 2
+          healthy_threshold: 1
+          http_health_check: { path: "/health" }
+      outlier_detection:
+        consecutive_5xx: 3
+        interval: 5s
+        base_ejection_time: 15s
+        max_ejection_percent: 100
+      load_assignment:
+        cluster_name: service-e-zone1-cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: zone1.service-e.service.consul
                       port_value: 8080
 
 admin:

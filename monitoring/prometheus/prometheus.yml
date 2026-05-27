@@ -21,7 +21,7 @@ scrape_configs:
         labels:
           envoy_instance: 'global'
 
-  # Zone 1 regional Envoy — collects zone1_ingress + app_zone1_cluster metrics
+  # Zone 1 regional Envoy — collects zone1_ingress + service-*-zone1-cluster metrics
   - job_name: 'envoy-zone1'
     metrics_path: '/stats/prometheus'
     static_configs:
@@ -29,10 +29,30 @@ scrape_configs:
         labels:
           envoy_instance: 'zone1'
 
-  # Zone 2 regional Envoy — collects zone2_ingress + app_zone2_cluster metrics
+  # Zone 2 regional Envoy — collects zone2_ingress + service-*-zone2-cluster metrics
   - job_name: 'envoy-zone2'
     metrics_path: '/stats/prometheus'
     static_configs:
       - targets: ['zone2-envoy:9901']
         labels:
           envoy_instance: 'zone2'
+
+  # Group B services — scrape targets pre-registered by T1 so Group B
+  # owners don't need to touch this file. Each target starts as DOWN
+  # (sleep-stub Dockerfiles in cmd/{events-collector,ml-analyzer,control-plane})
+  # and becomes UP once T2/T3/T4 land their real /metrics endpoints.
+
+  - job_name: 'events-collector'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['events-collector:9100']
+
+  - job_name: 'ml-analyzer'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['ml-analyzer:9200']
+
+  - job_name: 'control-plane'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['control-plane:9300']
