@@ -170,7 +170,12 @@ func main() {
 		slog.Warn("REDIS_URL is empty; routing hints will not be broadcast")
 	}
 
-	go pollLoop(ctx, st, *mlURL, *pollInterval, publisher)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		pollLoop(ctx, st, *mlURL, *pollInterval, publisher)
+	}()
 
 	go func() {
 		slog.Info("control-plane starting",
@@ -191,6 +196,10 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", slog.Any("err", err))
 	}
+	// Wait for pollLoop to observe ctx cancellation and return before the
+	// deferred publisher.Close() runs — otherwise an in-flight PublishSnapshot
+	// could race a closed Redis client.
+	wg.Wait()
 }
 
 // pollLoop fetches recommendations from ML on every tick and updates state.

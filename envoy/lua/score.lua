@@ -47,7 +47,11 @@ local function fetch_weights(request_handle, service)
   end
   local cjson = require("cjson")
   local ok, parsed = pcall(cjson.decode, body)
-  if not ok or type(parsed) ~= "table" or not parsed.zone1 or not parsed.zone2 then
+  -- Test presence with == nil, not `not x`: a legitimate weight of 0.0 (all
+  -- traffic shifted out of a zone) is truthy in Lua, but `not 0.0` is false —
+  -- so `not parsed.zone1` would already pass; == nil keeps the intent explicit
+  -- and guards against a non-numeric field slipping through.
+  if not ok or type(parsed) ~= "table" or parsed.zone1 == nil or parsed.zone2 == nil then
     request_handle:logWarn("score: invalid JSON from control-plane for " .. service .. " → fallback")
     return FALLBACK_WEIGHTS, true
   end
@@ -84,7 +88,11 @@ function envoy_on_request(request_handle)
   local service = service_from_path(path)
   local weights, was_fallback = get_weights(request_handle, service)
   local zone = pick_zone(weights)
-  headers:add("x-geo", zone)
+  -- replace, not add: a client-supplied x-geo with a non-zone value (not caught
+  -- by the guard above) would otherwise produce a multi-value header
+  -- ("badvalue,zone1"), which fails the exact_match route in global-envoy and
+  -- silently bypasses zone pinning.
+  headers:replace("x-geo", zone)
 end
 
 function envoy_on_response(response_handle)

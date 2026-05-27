@@ -172,7 +172,15 @@ func (s *RoutingHintsSubscriber) loop(ctx context.Context) {
 				case <-s.updates:
 				default:
 				}
-				s.updates <- hint
+				// Guard the re-send on ctx so a stalled consumer can't pin this
+				// goroutine on a blocking send during Close(). Single writer +
+				// buffer 1 makes the bare send safe today; the guard keeps it
+				// safe if the buffer size is ever changed.
+				select {
+				case s.updates <- hint:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}

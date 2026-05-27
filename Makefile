@@ -1,7 +1,7 @@
 # ── Runtime detection ──────────────────────────────────────────────────────────
 # Prefer docker if available; fall back to podman.
 # Override: make RUNTIME=podman up
-RUNTIME ?= $(shell command -v docker 2>/dev/null && echo docker || echo podman)
+RUNTIME ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
 
 # Compose command: docker compose (plugin) > docker-compose (legacy) > podman-compose
 COMPOSE ?= $(shell \
@@ -80,5 +80,5 @@ failure-partial:
 sdk-test:
 	$(RUNTIME) run --rm \
 	  -v "$(CURDIR)/sdk":/src/sdk \
-	  golang:1.22 \
+	  golang:1.26 \
 	  sh -c "cd /src/sdk && go test ./..."

@@ -198,7 +198,11 @@ func main() {
 				Address: addr,                 // IP so Consul DNS returns A-record (not CNAME)
 				Port:    8080,
 				Check: &consulapi.AgentServiceCheck{
-					HTTP:                           "http://" + instance + ":8080/health",
+					// Use addr (resolvable IP), not instance: if INSTANCE_NAME is
+					// unset, instance is "unknown", which the Consul agent can't
+					// resolve — the check would fail forever and the service would
+					// be silently deregistered after DeregisterCriticalServiceAfter.
+					HTTP:                           "http://" + addr + ":8080/health",
 					Interval:                       "5s",
 					Timeout:                        "2s",
 					DeregisterCriticalServiceAfter: "30s",
