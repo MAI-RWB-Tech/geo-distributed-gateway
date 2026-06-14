@@ -436,9 +436,30 @@ services:
     ports: ["9200:9200"]
     environment:
       - PROMETHEUS_URL=http://prometheus:9090
+      - ML_INFERENCE_URL=http://ml-inference:8000
     networks: [global-net]
     depends_on:
-      prometheus: { condition: service_started }
+      prometheus:    { condition: service_started }
+      ml-inference:  { condition: service_healthy }
+
+  ml-inference:
+    build:
+      context: ./ml-geo/ml_inference
+      dockerfile: Dockerfile
+    container_name: ml-inference
+    ports: ["8000:8000"]
+    volumes:
+      - ./ml-geo/models:/app/models:ro
+      - ./ml-geo/shared:/app/shared:ro
+    environment:
+      - PYTHONPATH=/app
+    networks: [global-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   control-plane:
     build: { context: ., dockerfile: cmd/control-plane/Dockerfile }
@@ -524,22 +545,6 @@ services:
       global-envoy:
         condition: service_healthy
 
-  failure-runner:
-    profiles: ["tools"]
-    build:
-      context: .
-      dockerfile: cmd/failure-runner/Dockerfile
-    # Mount the container socket so failure-runner can stop/start sibling containers.
-    # Docker:          /var/run/docker.sock  (default)
-    # Podman rootless: set DOCKER_SOCKET in .env to point to podman socket, e.g.:
-    #   DOCKER_SOCKET=/run/user/1000/podman/podman.sock
-    volumes:
-      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
-    networks:
-      - global-net
-    depends_on:
-      global-envoy:
-        condition: service_healthy
 
 networks:
   global-net:

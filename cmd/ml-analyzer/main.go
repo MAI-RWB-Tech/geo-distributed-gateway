@@ -1,8 +1,10 @@
-// ml-analyzer is an offline ML module that periodically polls Prometheus
+// ml-analyzer is an offline module that periodically polls Prometheus
 // for Envoy upstream-cluster metrics (p99 latency, RPS, error-rate) per
-// (service, zone) pair, computes a simple statistical "health score" for
-// each pair, and publishes load-balancing weight + per-service rate-limit
-// recommendations as JSON via HTTP.
+// (service, zone) pair, then forwards aggregated metrics to ml-inference
+// (CatBoost model) to compute zone weights. Falls back to a local
+// statistical heuristic when ml-inference is unavailable.
+// The resulting weights + per-service rate-limit recommendations are
+// published as JSON via HTTP.
 //
 // Endpoints:
 //
@@ -27,6 +29,7 @@ package main
 
 import (
 	"context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -80,10 +83,16 @@ type metricsState struct {
 	recommendationsGenerated atomic.Uint64
 	lastRecommendationUnix   atomic.Int64
 	queryErrors              sync.Map // query name (string) → *atomic.Uint64
+	mlInferenceCalls         sync.Map // result ("ok"|"error") → *atomic.Uint64
 }
 
 func (m *metricsState) incQueryError(query string) {
 	v, _ := m.queryErrors.LoadOrStore(query, new(atomic.Uint64))
+	v.(*atomic.Uint64).Add(1)
+}
+
+func (m *metricsState) incMLInference(result string) {
+	v, _ := m.mlInferenceCalls.LoadOrStore(result, new(atomic.Uint64))
 	v.(*atomic.Uint64).Add(1)
 }
 
@@ -109,6 +118,16 @@ func (m *metricsState) writeProm(w io.Writer) {
 		}
 		fmt.Fprintf(w, "ml_prometheus_query_errors_total{query=%q} %d\n", q, n)
 	}
+
+	fmt.Fprintln(w, "# HELP ml_inference_calls_total Number of calls to ml-inference service by result.")
+	fmt.Fprintln(w, "# TYPE ml_inference_calls_total counter")
+	for _, res := range []string{"ok", "error"} {
+		var n uint64
+		if v, ok := m.mlInferenceCalls.Load(res); ok {
+			n = v.(*atomic.Uint64).Load()
+		}
+		fmt.Fprintf(w, "ml_inference_calls_total{result=%q} %d\n", res, n)
+	}
 }
 
 // analyzer is the long-running periodic Prometheus poller.
@@ -117,6 +136,7 @@ type analyzer struct {
 	httpClient   *http.Client
 	sampleWindow time.Duration
 	metrics      *metricsState
+	mlInferenceURL string // empty = disabled
 
 	mu                  sync.RWMutex
 	current             *Recommendations
@@ -124,12 +144,13 @@ type analyzer struct {
 	lastSuccessRecorded atomic.Bool
 }
 
-func newAnalyzer(promURL string, sampleWindow time.Duration, metrics *metricsState) *analyzer {
+func newAnalyzer(promURL, mlInferenceURL string, sampleWindow time.Duration, metrics *metricsState) *analyzer {
 	return &analyzer{
-		promURL:      promURL,
-		httpClient:   &http.Client{Timeout: 10 * time.Second},
-		sampleWindow: sampleWindow,
-		metrics:      metrics,
+		promURL:        promURL,
+		mlInferenceURL: mlInferenceURL,
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		sampleWindow:   sampleWindow,
+		metrics:        metrics,
 	}
 }
 
@@ -190,6 +211,30 @@ func (a *analyzer) runOnce(ctx context.Context) error {
 	}
 
 	rec := buildRecommendations(p99, rps, errs)
+
+	// Attempt to override heuristic weights with ML-inference prediction.
+	// callMLInference aggregates global metrics from the raw Prometheus maps
+	// and POSTs to ml-inference. On success the returned split replaces every
+	// service's weight; on any failure we keep the heuristic weights.
+	if a.mlInferenceURL != "" {
+		if mlZone1, ok := a.callMLInference(ctx, p99, rps, errs); ok {
+			a.metrics.incMLInference("ok")
+			mlZone2 := round3(1.0 - mlZone1)
+			mlZone1 = round3(mlZone1)
+			for svc, w := range rec.Weights {
+				_ = w
+				rec.Weights[svc] = ZoneWeights{Zone1: mlZone1, Zone2: mlZone2}
+			}
+			slog.Info("ml-inference weights applied",
+				slog.Float64("zone1", mlZone1),
+				slog.Float64("zone2", mlZone2),
+			)
+		} else {
+			a.metrics.incMLInference("error")
+			slog.Warn("ml-inference unavailable, using heuristic weights")
+		}
+	}
+
 	a.setSnapshot(rec)
 	now := time.Now().Unix()
 	a.lastSuccessUnix.Store(now)
@@ -197,6 +242,150 @@ func (a *analyzer) runOnce(ctx context.Context) error {
 	a.metrics.recommendationsGenerated.Add(1)
 	a.metrics.lastRecommendationUnix.Store(now)
 	return nil
+}
+
+// callMLInference aggregates the raw Prometheus metric maps into a single
+// MetricsRequest payload and POSTs it to ml-inference /api/v1/predict.
+// Returns (zone1Weight, true) on success; (0, false) on any error so the
+// caller can fall back to heuristic weights without logging noise.
+func (a *analyzer) callMLInference(ctx context.Context, p99, rps, errs promResult) (float64, bool) {
+	type metricsRequest struct {
+		GlobalRPS              float64  `json:"global_rps"`
+		Zone1RPS               float64  `json:"zone1_rps"`
+		Zone2RPS               float64  `json:"zone2_rps"`
+		GlobalErrorRatePct     float64  `json:"global_error_rate_pct"`
+		Zone1ErrorRatePct      *float64 `json:"zone1_error_rate_pct,omitempty"`
+		Zone2ErrorRatePct      *float64 `json:"zone2_error_rate_pct,omitempty"`
+		Zone1LatencyP99Ms      *float64 `json:"zone1_latency_p99_ms,omitempty"`
+		Zone2LatencyP99Ms      *float64 `json:"zone2_latency_p99_ms,omitempty"`
+		Zone1ActiveCx          float64  `json:"zone1_active_cx"`
+		Zone2ActiveCx          float64  `json:"zone2_active_cx"`
+		Zone1Ejections         float64  `json:"zone1_ejections"`
+		Zone2Ejections         float64  `json:"zone2_ejections"`
+		GeoClusterEjections    float64  `json:"geo_cluster_ejections"`
+		GlobalDownstreamCxActive float64 `json:"global_downstream_cx_active"`
+		Zone1UpstreamRqRetry   float64  `json:"zone1_upstream_rq_retry"`
+		Zone2UpstreamRqRetry   float64  `json:"zone2_upstream_rq_retry"`
+		Zone1UpstreamRqPending float64  `json:"zone1_upstream_rq_pending_total"`
+		Zone2UpstreamRqPending float64  `json:"zone2_upstream_rq_pending_total"`
+	}
+
+	// Aggregate across all services: sum RPS per zone, average p99 per zone.
+	var z1RPS, z2RPS, z1Err, z2Err float64
+	var z1P99, z2P99 float64
+	z1P99Count, z2P99Count := 0, 0
+	for cluster, v := range rps {
+		m := clusterRE.FindStringSubmatch(cluster)
+		if m == nil {
+			continue
+		}
+		if m[2] == "zone1" {
+			z1RPS += v
+		} else {
+			z2RPS += v
+		}
+	}
+	for cluster, v := range errs {
+		m := clusterRE.FindStringSubmatch(cluster)
+		if m == nil {
+			continue
+		}
+		if m[2] == "zone1" {
+			z1Err += v
+		} else {
+			z2Err += v
+		}
+	}
+	for cluster, v := range p99 {
+		m := clusterRE.FindStringSubmatch(cluster)
+		if m == nil {
+			continue
+		}
+		if m[2] == "zone1" {
+			z1P99 += v
+			z1P99Count++
+		} else {
+			z2P99 += v
+			z2P99Count++
+		}
+	}
+	if z1P99Count > 0 {
+		z1P99 /= float64(z1P99Count)
+	}
+	if z2P99Count > 0 {
+		z2P99 /= float64(z2P99Count)
+	}
+
+	globalRPS := z1RPS + z2RPS
+	var z1ErrPct, z2ErrPct *float64
+	if z1RPS > 0 {
+		v := (z1Err / z1RPS) * 100.0
+		z1ErrPct = &v
+	}
+	if z2RPS > 0 {
+		v := (z2Err / z2RPS) * 100.0
+		z2ErrPct = &v
+	}
+	globalErrPct := 0.0
+	if globalRPS > 0 {
+		globalErrPct = ((z1Err + z2Err) / globalRPS) * 100.0
+	}
+	var z1P99Ptr, z2P99Ptr *float64
+	if z1P99Count > 0 {
+		z1P99Ptr = &z1P99
+	}
+	if z2P99Count > 0 {
+		z2P99Ptr = &z2P99
+	}
+
+	payload := metricsRequest{
+		GlobalRPS:          globalRPS,
+		Zone1RPS:           z1RPS,
+		Zone2RPS:           z2RPS,
+		GlobalErrorRatePct: globalErrPct,
+		Zone1ErrorRatePct:  z1ErrPct,
+		Zone2ErrorRatePct:  z2ErrPct,
+		Zone1LatencyP99Ms:  z1P99Ptr,
+		Zone2LatencyP99Ms:  z2P99Ptr,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, false
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
+		a.mlInferenceURL+"/api/v1/predict",
+		bytes.NewReader(body))
+	if err != nil {
+		return 0, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return 0, false
+	}
+
+	var result struct {
+		TrafficSplitZone1 float64 `json:"traffic_split_zone1"`
+		TrafficSplitZone2 float64 `json:"traffic_split_zone2"`
+		Confidence        float64 `json:"confidence"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, false
+	}
+	if result.TrafficSplitZone1 <= 0 && result.TrafficSplitZone2 <= 0 {
+		return 0, false
+	}
+	return result.TrafficSplitZone1, true
 }
 
 // queryByCluster runs a PromQL instant query and groups the results by
@@ -369,6 +558,7 @@ func main() {
 	interval := flag.Duration("interval", 60*time.Second, "Recommendation refresh interval")
 	listen := flag.String("listen", ":9200", "HTTP listen address")
 	sampleWindow := flag.Duration("sample-window", 5*time.Minute, "PromQL aggregation window")
+	mlInf := flag.String("ml-inference-url", "", "ml-inference base URL (env: ML_INFERENCE_URL, e.g. http://ml-inference:8000)")
 	flag.Parse()
 
 	// Flag → env → default precedence (avoid putting env into flag.String's
@@ -379,6 +569,10 @@ func main() {
 	if *prom == "" {
 		*prom = "http://prometheus:9090"
 	}
+	if *mlInf == "" {
+		*mlInf = os.Getenv("ML_INFERENCE_URL")
+	}
+	// No hard default: if unset ml-inference is simply not consulted.
 
 	// Operational logs → stderr (JSON).
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
@@ -393,7 +587,7 @@ func main() {
 	}
 
 	metrics := &metricsState{}
-	an := newAnalyzer(*prom, *sampleWindow, metrics)
+	an := newAnalyzer(*prom, *mlInf, *sampleWindow, metrics)
 
 	mux := http.NewServeMux()
 
@@ -499,6 +693,7 @@ func main() {
 			slog.String("prometheus_url", *prom),
 			slog.Duration("interval", *interval),
 			slog.Duration("sample_window", *sampleWindow),
+			slog.String("ml_inference_url", *mlInf),
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("http server error", slog.Any("err", err))

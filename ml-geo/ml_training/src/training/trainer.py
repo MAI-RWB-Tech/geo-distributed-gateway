@@ -57,46 +57,46 @@ def train_pipeline(
     model = CatBoostTrafficModel(params=model_params)
 
     print("[4/7] Training CatBoost model...")
-    mlflow.set_experiment(experiment_name)
-    with mlflow.start_run(run_name=f"catboost_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
-        mlflow.log_params(model_params)
-        mlflow.log_param("train_size", len(X_train))
-        mlflow.log_param("val_size", len(X_val))
-        mlflow.log_param("test_size", len(X_test))
-        mlflow.log_param("features", list(X_train.columns))
+    # mlflow.set_experiment(experiment_name)
+    # with mlflow.start_run(run_name=f"catboost_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    #     mlflow.log_params(model_params)
+    #     mlflow.log_param("train_size", len(X_train))
+    #     mlflow.log_param("val_size", len(X_val))
+    #     mlflow.log_param("test_size", len(X_test))
+    #     mlflow.log_param("features", list(X_train.columns))
 
-        model.train(X_train, y_train, X_val, y_val)
+    model.train(X_train, y_train, X_val, y_val)
 
-        print("[5/7] Evaluating...")
-        metrics = compute_metrics(model, X_test, y_test)
-        mlflow.log_metrics({
-            "test_mae": metrics["mae"],
-            "test_rmse": metrics["rmse"],
-            "test_r2": metrics["r2"],
-        })
-        print(f"  MAE:  {metrics['mae']:.4f}")
-        print(f"  RMSE: {metrics['rmse']:.4f}")
-        print(f"  R²:   {metrics['r2']:.4f}")
+    print("[5/7] Evaluating...")
+    metrics = compute_metrics(model, X_test, y_test)
+    # mlflow.log_metrics({
+    #     "test_mae": metrics["mae"],
+    #     "test_rmse": metrics["rmse"],
+    #     "test_r2": metrics["r2"],
+    # })
+    print(f"  MAE:  {metrics['mae']:.4f}")
+    print(f"  RMSE: {metrics['rmse']:.4f}")
+    print(f"  R²:   {metrics['r2']:.4f}")
 
-        log_feature_importance(model, X_train, mlflow_run=True)
+    log_feature_importance(model, X_train, mlflow_run=False)
 
-        backtest_results = run_backtest(model, df_processed, target)
-        mlflow.log_metric("backtest_mae", backtest_results["mae"])
-        print(f"  Backtest MAE: {backtest_results['mae']:.4f}")
+    # backtest_results = run_backtest(model, df_processed, target)
+    # # mlflow.log_metric("backtest_mae", backtest_results["mae"])
+    # print(f"  Backtest MAE: {backtest_results['mae']:.4f}")
 
-        print("[6/7] Exporting model...")
-        version = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_path = export_model(model, model_dir, version, X_train.columns.tolist())
-        mlflow.log_artifact(model_path)
+    print("[6/7] Exporting model...")
+    version = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_path = export_model(model, model_dir, version, X_train.columns.tolist())
+    # mlflow.log_artifact(model_path)
 
-        print("[7/7] Saving as latest...")
-        latest_path = os.path.join(model_dir, "model_latest.cbm")
-        model.model.save_model(latest_path)
-        columns_path = os.path.join(model_dir, "feature_columns.json")
-        with open(columns_path, "w") as f:
-            json.dump(list(X_train.columns), f)
+    print("[7/7] Saving as latest...")
+    latest_path = os.path.join(model_dir, "model_latest.cbm")
+    model.model.save_model(latest_path)
+    columns_path = os.path.join(model_dir, "feature_columns.json")
+    with open(columns_path, "w") as f:
+        json.dump(list(X_train.columns), f)
 
-        mlflow.catboost.log_model(model.model, "catboost_model")
+    # mlflow.catboost.log_model(model.model, "catboost_model")
 
     print("Training complete!")
     return model, metrics
