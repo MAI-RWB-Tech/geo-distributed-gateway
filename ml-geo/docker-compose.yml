@@ -1,0 +1,41 @@
+services:
+  ml-training:
+    build:
+      context: ./ml_training
+      dockerfile: Dockerfile
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - ./data/processed:/app/data/processed
+      - ./models:/app/models
+      - ./shared:/app/shared:ro
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    profiles:
+      - training
+
+  ml-inference:
+    build:
+      context: ./ml_inference
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  mlflow:
+    image: python:3.11-slim
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns
+    command: >
+      bash -c "pip install mlflow && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db"
+    profiles:
+      - training

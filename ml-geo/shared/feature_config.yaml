@@ -1,0 +1,76 @@
+features:
+  raw:
+    - name: global_rps
+      dtype: float
+    - name: zone1_rps
+      dtype: float
+    - name: zone2_rps
+      dtype: float
+    - name: global_error_rate_pct
+      dtype: float
+    - name: zone1_error_rate_pct
+      dtype: float
+    - name: zone2_error_rate_pct
+      dtype: float
+    - name: zone1_latency_p50_ms
+      dtype: float
+    - name: zone1_latency_p95_ms
+      dtype: float
+    - name: zone1_latency_p99_ms
+      dtype: float
+    - name: zone2_latency_p50_ms
+      dtype: float
+    - name: zone2_latency_p95_ms
+      dtype: float
+    - name: zone2_latency_p99_ms
+      dtype: float
+    - name: zone1_active_cx
+      dtype: float
+    - name: zone2_active_cx
+      dtype: float
+    - name: zone1_ejections
+      dtype: float
+    - name: zone2_ejections
+      dtype: float
+    - name: geo_cluster_ejections
+      dtype: float
+    - name: global_downstream_cx_active
+      dtype: float
+    - name: zone1_upstream_rq_retry
+      dtype: float
+    - name: zone2_upstream_rq_retry
+      dtype: float
+    - name: zone1_upstream_rq_pending_total
+      dtype: float
+    - name: zone2_upstream_rq_pending_total
+      dtype: float
+
+  derived:
+    - name: load_imbalance
+      expr: "abs(zone1_rps - zone2_rps) / max(global_rps, 1.0)"
+    - name: latency_ratio_p99
+      expr: "zone1_latency_p99_ms / max(zone2_latency_p99_ms, 0.001)"
+    - name: latency_ratio_p95
+      expr: "zone1_latency_p95_ms / max(zone2_latency_p95_ms, 0.001)"
+    - name: total_ejections
+      expr: "zone1_ejections + zone2_ejections"
+    - name: total_pending
+      expr: "zone1_upstream_rq_pending_total + zone2_upstream_rq_pending_total"
+    - name: total_retries
+      expr: "zone1_upstream_rq_retry + zone2_upstream_rq_retry"
+    - name: zone1_error_pressure
+      expr: "zone1_error_rate_pct * zone1_rps"
+    - name: zone2_error_pressure
+      expr: "zone2_error_rate_pct * zone2_rps"
+
+  drop_columns:
+    - timestamp
+    - datetime_utc
+    - traffic_split_zone1
+
+target: traffic_split_zone1
+
+postprocessing:
+  min_split: 0.05
+  max_split: 0.95
+  smoothing_alpha: 0.3

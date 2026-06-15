@@ -82,3 +82,14 @@ sdk-test:
 	  -v "$(CURDIR)/sdk":/src/sdk \
 	  golang:1.26 \
 	  sh -c "cd /src/sdk && go test ./..."
+
+## ml-train: Run model training inside ml-training container
+ml-train:
+	$(COMPOSE) --profile training run --rm ml-training
+
+## ml-test: Run ML-component unit tests inside ml-inference container
+ml-test:
+	$(COMPOSE) run --rm ml-inference pytest
+
+## ml-train: Run model training inside ml-training container
+ml-train:
